@@ -158,7 +158,8 @@ class OfficialWorkspaceTests(unittest.TestCase):
                                 'languagePersistence': {'status': 'passed',
                                     'preferenceRecovery': {'restore': 'passed', 'verify': 'passed'},
                                     'launches': [{'status': 'passed', 'hostedRunnerPreferencesVerifiedBeforeAction': True,
-                                                  'nativeMenuRebuilds': 3}] * 3}}
+                                                  'nativeMenuRebuilds': 3, 'requestClose': True,
+                                                  'closeAccepted': True, 'sessionClosed': True}] * 3}}
                     name = base + '.build.json'
                     (assets / name).write_text(json.dumps(manifest))
                     write_checksums(assets, files + [name], base + '.sha256.txt')
@@ -173,6 +174,16 @@ class OfficialWorkspaceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'AAC MP4'):
                     assemble(repo, assets, 'v4.0.3')
                 windows.write_bytes(correct)
+                mac = assets / 'OpenRV-4.0.3-build.17-macOS-arm64.build.json'
+                correct_mac = mac.read_bytes()
+                for field in ('requestClose', 'closeAccepted', 'sessionClosed'):
+                    with self.subTest(missing_lifecycle=field):
+                        manifest = json.loads(correct_mac)
+                        manifest['languagePersistence']['launches'][2].pop(field)
+                        mac.write_text(json.dumps(manifest))
+                        with self.assertRaisesRegex(ValueError, 'Mac native chooser persistence'):
+                            assemble(repo, assets, 'v4.0.3')
+                mac.write_bytes(correct_mac)
                 assemble(repo, assets, 'v4.0.3')
             self.assertEqual((assets / 'OpenRV-4.0.3-build.17-source.provenance.json').read_bytes(),
                              (output / 'build-plan.json').read_bytes())

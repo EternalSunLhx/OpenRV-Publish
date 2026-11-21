@@ -141,5 +141,18 @@ runs:
         ORV_ARCH: ${{ inputs.arch-type }}
       run: bash ci/localized-release/build-macos.sh
     - name: Verify and package app bundles
+      id: macos_package
       shell: bash
       run: python3 ci/localized-release/package-macos.py --arch '${{ inputs.arch-type }}'
+    - name: Collect bounded owned runtime evidence
+      if: ${{ always() && steps.macos_package.outcome != '' && steps.macos_package.outcome != 'skipped' }}
+      shell: bash
+      run: python3 -B ci/localized-release/collect_macos_runtime_evidence.py --arch '${{ inputs.arch-type }}'
+    - name: Preserve runtime evidence including failed packaging
+      if: ${{ always() && steps.macos_package.outcome != '' && steps.macos_package.outcome != 'skipped' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: macos-runtime-evidence-${{ inputs.arch-type }}
+        path: _release_work/macos-runtime-evidence-${{ inputs.arch-type }}/
+        if-no-files-found: error
+        retention-days: 14

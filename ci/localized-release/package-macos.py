@@ -132,14 +132,18 @@ def main() -> None:
         persistence = json.loads((persistence_dir / 'report.json').read_text(encoding='utf-8'))
         if (persistence.get('status') != 'passed' or len(persistence.get('launches', [])) != 3
                 or any(persistence.get('preferenceRecovery', {}).get(operation, {}).get('status') != 'passed'
-                       for operation in ('restore', 'verify'))):
+                       for operation in ('restore', 'verify'))
+                or any(launch.get('details', {}).get(field) is not True
+                       for launch in persistence['launches']
+                       for field in ('requestClose', 'closeAccepted', 'sessionClosed'))):
             raise RuntimeError('Expected three successful Mac chooser launches and verified preference restoration')
         persistence_proof = {'status': persistence['status'], 'preferenceScope': persistence['preferenceScope'],
                              'preferenceRecovery': {operation: persistence['preferenceRecovery'][operation]['status']
                                                     for operation in ('restore', 'verify')},
                              'launches': [{key: launch['details'][key] for key in (
                                  'stage', 'status', 'actualLanguage', 'nativeMenuRebuilds',
-                                 'hostedRunnerPreferencesVerifiedBeforeAction', 'savedPreference')}
+                                 'hostedRunnerPreferencesVerifiedBeforeAction', 'savedPreference',
+                                 'requestClose', 'closeAccepted', 'sessionClosed')}
                                  for launch in persistence['launches']]}
     # Detect app writes by runtime tests; do not hide them by re-signing.
     verify_app(app)

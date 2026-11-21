@@ -145,6 +145,72 @@ MAC_RESTART_NOTE = r'''def close_owned_restart_note():
         finish(1, traceback.format_exc())
 '''
 
+MAC_FINISH = r'''def finish(code, error=None):
+    if state['finished']:
+        return
+    if code != 0:
+        state['finished'] = True
+        if state.get('closeTimer'):
+            state['closeTimer'].stop()
+        result['status'] = 'failed'
+        if error:
+            result['error'] = error
+        checkpoint('finish')
+        pathlib.Path(config['childReport']).write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        print('LANGUAGE_PERSISTENCE_STAGE_FAILED', flush=True)
+        app.exit(code)
+        return
+    if state.get('closing'):
+        return
+    try:
+        window = state['window']
+        assert window.objectName().startswith('rv-session') and window.isVisible(), 'Expected the owned visible RV session'
+        assert window.testAttribute(QtCore.Qt.WA_DeleteOnClose), 'RV session must delete itself after accepting close'
+        assert window.testAttribute(QtCore.Qt.WA_QuitOnClose) and app.quitOnLastWindowClosed(), 'Expected normal last-session quit behavior'
+        if state.get('closeTimer'):
+            state['closeTimer'].stop()
+        state['closing'] = True
+        result.update(status='closing', requestClose=False, closeAccepted=False, sessionClosed=False)
+
+        def session_closed(*unused):
+            if state['finished']:
+                return
+            try:
+                assert result['requestClose'] and result['closeAccepted'], 'Session closed before the owned close request completed'
+                result.update(sessionClosed=True, status='passed')
+                state['finished'] = True
+                for key in ('window', 'actions', 'menu'):
+                    state.pop(key, None)
+                checkpoint('finish')
+                pathlib.Path(config['childReport']).write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+                print('LANGUAGE_PERSISTENCE_STAGE_OK', flush=True)
+            except BaseException:
+                state['finished'] = False
+                finish(1, traceback.format_exc())
+
+        def request_close():
+            if state['finished']:
+                return
+            try:
+                result['requestClose'] = True
+                checkpoint('request-close')
+                # RvApplication::quitAll uses this same zero-argument close()
+                # on each RvDocument. It dispatches before-session-deletion and
+                # WA_DeleteOnClose cleanup before normal last-window shutdown.
+                assert window.close(), 'RV rejected the owned session close request'
+                result['closeAccepted'] = True
+            except BaseException:
+                finish(1, traceback.format_exc())
+
+        window.destroyed.connect(session_closed)
+        # Queue the real close so the menu-check callback unwinds first. No
+        # elapsed-time delay and no successful app.exit() teardown shortcut.
+        QtCore.QTimer.singleShot(0, request_close)
+    except BaseException:
+        finish(1, traceback.format_exc())
+'''
+
+
 MAC_CHECKPOINTS = r'''def checkpoint(phase):
     entry = {'stage': config['stage'], 'phase': phase, 'time': round(time.time(), 3)}
     path = pathlib.Path(config['progressReport'])
@@ -171,6 +237,9 @@ def gui_check_source():
     start = source.index('def close_owned_restart_note():\n')
     end = source.index('\ndef check_ready():', start)
     source = source[:start] + MAC_RESTART_NOTE + source[end:]
+    start = source.index('def finish(')
+    end = source.index('\ndef verify_language(', start)
+    source = source[:start] + MAC_FINISH + source[end:]
     start = source.index('\ndef finish(')
     source = source[:start] + '\n' + MAC_CHECKPOINTS + source[start:]
     # Cocoa's menu bar is parentless (RvApplication::m_macMenuBar), while the
@@ -183,8 +252,6 @@ def gui_check_source():
          "menus = [menu for menu in app.allWidgets() if isinstance(menu, QtWidgets.QMenu)\n"),
         ("current_menus = [item for item in window.findChildren(QtWidgets.QMenu)\n",
          "current_menus = [item for item in app.allWidgets() if isinstance(item, QtWidgets.QMenu)\n"),
-        ("    state['finished'] = True\n",
-         "    state['finished'] = True\n    checkpoint('finish')\n"),
         ("        result['preferenceBeforeAction'] = before\n",
          "        result['preferenceBeforeAction'] = before\n        checkpoint('ready')\n"),
         ("            action.trigger()  # Native QAction callback opens its own nested QMessageBox loop.\n",
@@ -205,7 +272,7 @@ def partial_progress(path, stage):
         value = json.loads(path.read_text(encoding='utf-8'))
         if (isinstance(value, dict) and set(value) == {'stage', 'phase', 'time'}
                 and value['stage'] == stage and value['phase'] in
-                {'boot', 'ready', 'before-action', 'after-action', 'finish'}
+                {'boot', 'ready', 'before-action', 'after-action', 'request-close', 'finish'}
                 and type(value['time']) in (int, float)):
             return value
     except (OSError, ValueError):
@@ -334,7 +401,7 @@ def main(argv=None) -> int:
         if timed_out or process.returncode:
             print(stdout_text[-4000:], flush=True)
             print(stderr_text[-4000:], file=sys.stderr, flush=True)
-        result = {'stage': name, 'exitCode': process.returncode, 'timedOut': timed_out,
+        result = {'stage': name, 'pid': process.pid, 'exitCode': process.returncode, 'timedOut': timed_out,
                   'seconds': round(time.monotonic() - started, 3)}
         return result, stdout_text
 
@@ -363,7 +430,8 @@ def main(argv=None) -> int:
                 result['childReportError'] = type(error).__name__ + ': ' + str(error)[:500]
             passed = (not result['timedOut'] and result['exitCode'] == 0 and 'LANGUAGE_PERSISTENCE_STAGE_OK' in stdout
                       and isinstance(details, dict) and details.get('status') == 'passed'
-                      and details.get('hostedRunnerPreferencesVerifiedBeforeAction') is True)
+                      and details.get('hostedRunnerPreferencesVerifiedBeforeAction') is True
+                      and all(details.get(key) is True for key in ('requestClose', 'closeAccepted', 'sessionClosed')))
             result.update(status='passed' if passed else 'failed', details=details)
             report['launches'].append(result)
             print(result['status'] + ': ' + stage['stage'], flush=True)

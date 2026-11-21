@@ -243,6 +243,89 @@ class RestartNoteMatcherTests(unittest.TestCase):
                 self.assertEqual(state['restartNote'] is not None, bool(expected))
 
 
+class NormalCloseContractTests(unittest.TestCase):
+    """Exercise the generated callback protocol, without claiming native Qt execution."""
+
+    @contextlib.contextmanager
+    def fixture(self, *, accepted=True, auto_quit=True):
+        callbacks, destroyed_callbacks = [], []
+        window = mock.Mock()
+        window.objectName.return_value = 'rv-session000'
+        window.isVisible.return_value = True
+        window.testAttribute.return_value = True
+        window.close.return_value = accepted
+        window.destroyed.connect.side_effect = destroyed_callbacks.append
+        app = mock.Mock()
+        app.quitOnLastWindowClosed.return_value = auto_quit
+        def single_shot(delay, callback):
+            self.assertEqual(delay, 0, 'Normal close must be queued without a timed delay')
+            callbacks.append(callback)
+        core = types.SimpleNamespace(Qt=types.SimpleNamespace(WA_DeleteOnClose=1, WA_QuitOnClose=2),
+                                     QTimer=types.SimpleNamespace(singleShot=single_shot))
+        functions = [node for node in ast.parse(persistence.gui_check_source()).body
+                     if isinstance(node, ast.FunctionDef) and node.name == 'finish']
+        self.assertEqual(len(functions), 1)
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stdout(io.StringIO()) as output:
+            report = Path(temporary) / 'gui.json'
+            namespace = {'state': {'finished': False, 'window': window, 'actions': [], 'menu': object()},
+                         'result': {}, 'config': {'childReport': str(report)},
+                         'app': app, 'QtCore': core, 'checkpoint': mock.Mock(),
+                         'pathlib': __import__('pathlib'), 'json': json, 'traceback': traceback}
+            exec(compile(ast.Module(body=functions, type_ignores=[]), '<actual-mac-finish>', 'exec'), namespace)
+            yield namespace, window, app, callbacks, destroyed_callbacks, report, output
+
+    def test_success_requires_real_close_acceptance_then_destruction_and_never_exits_directly(self):
+        with self.fixture() as (namespace, window, app, callbacks, destroyed, report, output):
+            namespace['finish'](0)
+            namespace['finish'](0)  # Duplicate callbacks cannot request a second close.
+            self.assertEqual(len(callbacks), 1)
+            self.assertEqual(namespace['result']['status'], 'closing')
+            self.assertFalse(report.exists())
+            window.close.assert_not_called()
+            callbacks.pop()()
+            window.close.assert_called_once_with()
+            self.assertTrue(namespace['result']['requestClose'])
+            self.assertTrue(namespace['result']['closeAccepted'])
+            self.assertFalse(namespace['result']['sessionClosed'])
+            self.assertFalse(report.exists())
+            self.assertNotIn('LANGUAGE_PERSISTENCE_STAGE_OK', output.getvalue())
+            destroyed[0]()
+            details = json.loads(report.read_text(encoding='utf-8'))
+            self.assertEqual(details['status'], 'passed')
+            self.assertTrue(all(details[key] is True for key in ('requestClose', 'closeAccepted', 'sessionClosed')))
+            self.assertNotIn('window', namespace['state'])
+            self.assertIn('LANGUAGE_PERSISTENCE_STAGE_OK', output.getvalue())
+            app.exit.assert_not_called()
+
+    def test_rejected_or_premature_close_cannot_become_success(self):
+        for premature in (False, True):
+            with self.subTest(premature=premature), self.fixture(accepted=False) as fixture:
+                namespace, window, app, callbacks, destroyed, report, output = fixture
+                namespace['finish'](0)
+                if premature:
+                    destroyed[0]()
+                callbacks[0]()
+                details = json.loads(report.read_text(encoding='utf-8'))
+                self.assertEqual(details['status'], 'failed')
+                self.assertNotIn('LANGUAGE_PERSISTENCE_STAGE_OK', output.getvalue())
+                app.exit.assert_called_once_with(1)
+
+    def test_disabled_normal_auto_quit_fails_instead_of_forcing_successful_exit(self):
+        with self.fixture(auto_quit=False) as (namespace, window, app, callbacks, destroyed, report, output):
+            namespace['finish'](0)
+            self.assertEqual(callbacks, [])
+            self.assertEqual(json.loads(report.read_text())['status'], 'failed')
+            app.exit.assert_called_once_with(1)
+
+    def test_explicit_failure_keeps_nonzero_exit_and_never_requests_close(self):
+        with self.fixture() as (namespace, window, app, callbacks, destroyed, report, output):
+            namespace['finish'](2, 'fixture failure')
+            self.assertEqual(callbacks, [])
+            self.assertEqual(json.loads(report.read_text())['error'], 'fixture failure')
+            app.exit.assert_called_once_with(2)
+            window.close.assert_not_called()
+
+
 class ProgressContractTests(unittest.TestCase):
     def test_actual_checkpoint_contains_only_stage_phase_time(self):
         source = persistence.gui_check_source()
@@ -255,11 +338,11 @@ class ProgressContractTests(unittest.TestCase):
                          'os': os, 'time': types.SimpleNamespace(time=lambda: 1234.567)}
             exec(compile(ast.Module(body=[function], type_ignores=[]), '<actual-checkpoint>', 'exec'), namespace)
             with contextlib.redirect_stdout(io.StringIO()) as output:
-                for phase in ('boot', 'ready', 'before-action', 'after-action', 'finish'):
+                for phase in ('boot', 'ready', 'before-action', 'after-action', 'request-close', 'finish'):
                     namespace['checkpoint'](phase)
                     entry = json.loads(path.read_text(encoding='utf-8'))
                     self.assertEqual(entry, {'stage': config['stage'], 'phase': phase, 'time': 1234.567})
-            self.assertEqual(len(output.getvalue().splitlines()), 5)
+            self.assertEqual(len(output.getvalue().splitlines()), 6)
             self.assertFalse(path.with_name('progress.json.tmp').exists())
             self.assertEqual(persistence.partial_progress(path, config['stage'])['phase'], 'finish')
             self.assertIsNone(persistence.partial_progress(path, 'different-stage'))
@@ -271,14 +354,21 @@ class ProgressContractTests(unittest.TestCase):
                           and 'details' in ast.dump(node.value))
         code = compile(ast.Expression(expression), '<actual-parent-pass-condition>', 'eval')
         base = {'result': {'timedOut': False, 'exitCode': 0}, 'stdout': 'LANGUAGE_PERSISTENCE_STAGE_OK',
-                'details': {'status': 'passed', 'hostedRunnerPreferencesVerifiedBeforeAction': True},
+                'details': {'status': 'passed', 'hostedRunnerPreferencesVerifiedBeforeAction': True,
+                            'requestClose': True, 'closeAccepted': True, 'sessionClosed': True},
                 'progress': {'phase': 'finish'}}
         self.assertTrue(eval(code, dict(base)))
         cases = [dict(details=None), dict(details={}), dict(stdout=''),
-                 dict(result={'timedOut': True, 'exitCode': 0}), dict(result={'timedOut': False, 'exitCode': 1})]
+                 dict(result={'timedOut': True, 'exitCode': 0}), dict(result={'timedOut': False, 'exitCode': 1}),
+                 dict(result={'timedOut': False, 'exitCode': -10})]
         for case in cases:
             with self.subTest(case=case):
                 self.assertFalse(eval(code, dict(base, **case)))
+        for key in ('requestClose', 'closeAccepted', 'sessionClosed'):
+            for invalid in (False, None, 1):
+                with self.subTest(key=key, invalid=invalid):
+                    details = dict(base['details'], **{key: invalid})
+                    self.assertFalse(eval(code, dict(base, details=details)))
 
     def test_original_child_deadlines_and_new_outer_budget(self):
         source = persistence.gui_check_source()

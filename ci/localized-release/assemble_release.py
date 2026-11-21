@@ -125,6 +125,7 @@ def assemble(repo: pathlib.Path, assets: pathlib.Path, tag: str) -> None:
                            for operation in ('restore', 'verify'))
                     or any(launch.get('status') != 'passed'
                            or launch.get('hostedRunnerPreferencesVerifiedBeforeAction') is not True
+                           or any(launch.get(field) is not True for field in ('requestClose', 'closeAccepted', 'sessionClosed'))
                            or launch.get('nativeMenuRebuilds') != 3 for launch in persistence['launches'])):
                 raise ValueError('Mac native chooser persistence or hosted preference restoration did not pass')
         checksum_name = path.name.removesuffix('.build.json') + '.sha256.txt'
