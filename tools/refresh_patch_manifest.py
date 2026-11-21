@@ -16,8 +16,7 @@ CONFIG = 'ci/upstream-release-watch/localization-base.json'
 UPSTREAM = 'AcademySoftwareFoundation/OpenRV'
 DEFAULT_BASE = 'b6f33435afdbafaf4a94d412e0400eef32b16976'
 OPTIONAL = 'src/plugins/rv-packages/annotate_beta'
-PATCHES = (('patches/openrv-core.patch', None, None), ('patches/annotate-beta.patch', OPTIONAL, None),
-           ('patches/openrv-preferences-lifetime.patch', None, 'preferences-lifetime-v1'))
+PATCHES = (('patches/openrv-core.patch', None), ('patches/annotate-beta.patch', OPTIONAL))
 CATALOG = 'localization/i18n_zh.ts'
 CATALOG_TARGET = 'src/lib/app/RvCommon/qrc/translations/i18n_zh.ts'
 RUNTIME_PREFIXES = ('ci/', 'tools/', 'tests/', '.github/actions/')
@@ -63,13 +62,11 @@ def build_manifest(repo: Path) -> bytes:
     if not isinstance(base, str) or not re.fullmatch(r'[0-9a-f]{40}', base):
         raise ValueError('The staged upstream source base must be a full Git commit identity')
     patches = []
-    for path, component, condition in PATCHES:
+    for path, component in PATCHES:
         if path not in blobs:
             raise ValueError('Missing staged reviewed patch: ' + path)
         patches.append({'path': path, 'sha256': hashlib.sha256(blobs[path][1]).hexdigest(),
                         'optional_component': component})
-        if condition is not None:
-            patches[-1]['condition'] = condition
     owned = []
     for source in sorted(blobs):
         if source == CONFIG:

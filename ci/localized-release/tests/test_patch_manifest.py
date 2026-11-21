@@ -23,7 +23,6 @@ class PatchManifestTests(unittest.TestCase):
         files = {'.gitattributes': b'* text=auto eol=lf\n*.patch -text\n',
                  'patches/openrv-core.patch': b'fixed core patch\n',
                  'patches/annotate-beta.patch': b'fixed optional patch\n',
-                 'patches/openrv-preferences-lifetime.patch': b'fixed preferences lifetime patch\n',
                  'overlay/src/owned.cpp': b'// staged native code\r\n',
                  refresh.CATALOG: b'<TS/>\n',
                  '.github/workflows/release.yml': b'name: Own release\n',
@@ -65,18 +64,19 @@ class PatchManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'complete translation catalog'):
             refresh.build_manifest(self.repo)
 
-    def test_only_final_preferences_patch_has_the_explicit_condition_and_staged_digest(self):
+    def test_reviewed_patches_use_staged_digests_and_only_annotate_beta_is_optional(self):
         manifest = json.loads(refresh.build_manifest(self.repo))
-        conditional = [entry for entry in manifest['patches'] if 'condition' in entry]
-        self.assertEqual(conditional, [manifest['patches'][-1]])
-        self.assertEqual(conditional[0], {
-            'path': 'patches/openrv-preferences-lifetime.patch', 'optional_component': None,
-            'condition': 'preferences-lifetime-v1',
-            'sha256': hashlib.sha256(b'fixed preferences lifetime patch\n').hexdigest()})
-        (self.repo / conditional[0]['path']).write_bytes(b'unstaged alternative patch\n')
+        core = 'patches/openrv-core.patch'
+        self.assertEqual(manifest['patches'], [
+            {'path': core, 'optional_component': None,
+             'sha256': hashlib.sha256(b'fixed core patch\n').hexdigest()},
+            {'path': 'patches/annotate-beta.patch', 'optional_component': 'src/plugins/rv-packages/annotate_beta',
+             'sha256': hashlib.sha256(b'fixed optional patch\n').hexdigest()},
+        ])
+        (self.repo / core).write_bytes(b'unstaged alternative patch\n')
         self.assertEqual(json.loads(refresh.build_manifest(self.repo)), manifest)
-        (self.repo / conditional[0]['path']).write_bytes(b'fixed preferences lifetime patch\n')
-        self.git('rm', '--cached', conditional[0]['path'])
+        (self.repo / core).write_bytes(b'fixed core patch\n')
+        self.git('rm', '--cached', core)
         with self.assertRaisesRegex(ValueError, 'Missing staged reviewed patch'):
             refresh.build_manifest(self.repo)
 

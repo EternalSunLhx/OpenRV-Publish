@@ -1,5 +1,7 @@
 # Preference dialog ownership regression
 
+Use this fixture with a historical source tree containing the preferences fix from maintenance snapshot `cb862fa`. To exercise the same window lifecycle in a current package, run the `preferences-owner-close` case in the manual post-package workflow.
+
 This optional standalone Qt test extracts the actual patched `prefDialog()` getter, cached member and shutdown helper from a materialized OpenRV source directory. It verifies that deleting document A destroys its preferences, clears the application cache, and lets document B create fresh preferences. It also checks that shutdown creates no unopened auxiliary windows and preserves the existing network shutdown/close ordering.
 
 The widgets and parent destruction are real Qt. Only RV's Session context and unrelated auxiliary dialog classes are minimal fixture types; this is not a full OpenRV playback or macOS product test. It does not add a mandatory packaging step.

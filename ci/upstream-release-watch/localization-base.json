@@ -15,12 +15,6 @@
       "path": "patches/annotate-beta.patch",
       "sha256": "b00a458ac2e294d2cccd6a97f9809d8b4682e86ed1d5d89938621604ce6b150b",
       "optional_component": "src/plugins/rv-packages/annotate_beta"
-    },
-    {
-      "path": "patches/openrv-preferences-lifetime.patch",
-      "sha256": "7653ca9a303c28da0357c7c5f6931f43fd3ce70de8670b22d31e9e76f0cb0754",
-      "optional_component": null,
-      "condition": "preferences-lifetime-v1"
     }
   ],
   "owned_files": [
@@ -42,7 +36,7 @@
       "source": "ci/WORKFLOWS.zh-CN.md",
       "destination": "ci/WORKFLOWS.zh-CN.md",
       "mode": "100644",
-      "sha256": "a4358f21bc58c9374d70bfbeead60803cb8ef6f3377817cff76abf98156a3bcb",
+      "sha256": "ac9c8b367907dd34bdd9f8bf9e5567b4a7c94794f6ae3645fb978bf29fdca10e",
       "replace": false
     },
     {
@@ -56,7 +50,7 @@
       "source": "ci/localized-release/README.md",
       "destination": "ci/localized-release/README.md",
       "mode": "100644",
-      "sha256": "6e3751b6a2f7931927a935e9bad8a1be5a697e4ca726360f4fee9b07a3219acc",
+      "sha256": "493b1fb5c29d6d124f45011f5e15bd89baefa7ddc112767c472efcc3e8342399",
       "replace": false
     },
     {
@@ -532,7 +526,7 @@
       "source": "ci/localized-release/tests/test_patch_manifest.py",
       "destination": "ci/localized-release/tests/test_patch_manifest.py",
       "mode": "100644",
-      "sha256": "1f9bc3564bd6cb3685d2dff3a19c1275a4062cea3e6489474525ab1496e79ce4",
+      "sha256": "8be427412f81a23c6248f708af61949f0d7309f294904838a06019944ac691c6",
       "replace": false
     },
     {
@@ -749,7 +743,7 @@
       "source": "tests/localization/pref_dialog_lifetime/README.md",
       "destination": "tests/localization/pref_dialog_lifetime/README.md",
       "mode": "100644",
-      "sha256": "e77efd38c437cd39727b96aa22315cb54f1ae0f9d12807fdb8648864cb09f828",
+      "sha256": "191f9c499fea995507a4172d951319238358c11f9568acba5a3eca49c1db42bc",
       "replace": false
     },
     {
@@ -854,7 +848,7 @@
       "source": "tools/refresh_patch_manifest.py",
       "destination": "tools/refresh_patch_manifest.py",
       "mode": "100644",
-      "sha256": "7f188391f5e454c4d12267a7c9c54381f795d1abde059e9c8d660317c9cb6deb",
+      "sha256": "8bed8ce1d33d429c3263e7a266f92e2c5fbb61f23f24b2cd31015851083f1c34",
       "replace": false
     }
   ]
