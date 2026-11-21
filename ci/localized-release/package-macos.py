@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 
-from release_common import copy_dependency_licenses, copy_licenses, run, sha256, source_metadata, write_checksums, write_json
+from release_common import PUBLISHER, PUBLISHER_URL, copy_dependency_licenses, copy_licenses, run, sha256, source_metadata, write_checksums, write_json
 from bundle_macos import bundle_dependencies
 from sign_macos import sign_app, verify_app
 from qt_runtime_profile import apply_macos_qt_runtime_profile
@@ -29,12 +29,31 @@ def update_bundle_metadata(app: pathlib.Path, metadata: dict, minimum_macos: str
     info['CFBundleVersion'] = metadata['version']
     info['OpenRVReleaseVersion'] = metadata['releaseVersion']
     info['OpenRVNativeVersion'] = metadata['nativeVersion']
+    info['OpenRVPublisher'] = PUBLISHER
+    info['OpenRVPublisherURL'] = PUBLISHER_URL
     if minimum_macos:
         existing = str(info.get('LSMinimumSystemVersion', '0.0'))
         if tuple(map(int, minimum_macos.split('.'))) > tuple(map(int, existing.split('.'))):
             info['LSMinimumSystemVersion'] = minimum_macos
     with plist_path.open('wb') as stream:
         plistlib.dump(info, stream, sort_keys=False)
+
+
+def write_publisher_info(resources: pathlib.Path) -> pathlib.Path:
+    """Include community attribution without replacing upstream legal notices."""
+    resources.mkdir(parents=True, exist_ok=True)
+    path = resources / 'PUBLISHER.txt'
+    path.write_text(
+        'OpenRV community build / OpenRV 社区发行版\n\n'
+        f'Publisher / 发布者: {PUBLISHER}\n'
+        f'Community build repository / 社区发行仓库: {PUBLISHER_URL}\n'
+        'Upstream project / 上游项目: https://github.com/AcademySoftwareFoundation/OpenRV\n\n'
+        'Community localization and packaging based on ASWF OpenRV.\n'
+        '基于 ASWF OpenRV 的社区汉化与打包版本。\n'
+        'Upstream and third-party copyright and license notices are retained in Resources/licenses.\n'
+        '上游及第三方版权与许可证说明保留在 Resources/licenses 目录中。\n',
+        encoding='utf-8', newline='\n')
+    return path
 
 
 def is_macho(path: pathlib.Path) -> bool:
@@ -96,6 +115,7 @@ def main() -> None:
                 raise RuntimeError(f'Non-relocatable dependency {dependency} in {binary}')
     minimum_macos = max(minimum_versions, key=lambda value: tuple(map(int,value.split('.')))) if minimum_versions else ''
     update_bundle_metadata(app, metadata, minimum_macos)
+    publisher_info = write_publisher_info(resources)
     metadata['relocatedNonMachO'] = sign_app(app, is_macho)
     smoke = work / ('smoke-' + args.arch)
     smoke_args = [sys.executable, str(repo / 'ci/localized-release/runtime_smoke.py'), '--runtime', str(app), '--work', str(smoke)]
@@ -131,6 +151,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix='dmg-', dir=work) as staging:
         staging_path = pathlib.Path(staging)
         subprocess.run(['ditto', str(app), str(staging_path / 'RV.app')], check=True)
+        shutil.copy2(publisher_info, staging_path / publisher_info.name)
         (staging_path / 'Applications').symlink_to('/Applications', target_is_directory=True)
         subprocess.run(['hdiutil', 'create', '-volname', 'OpenRV', '-srcfolder', staging,
                         '-ov', '-format', 'UDZO', str(output / dmg_name)], check=True)

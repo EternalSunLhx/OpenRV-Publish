@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 
 from official_release import release_identity
 
+PUBLISHER = 'EternalSunLhx'
+PUBLISHER_URL = 'https://github.com/EternalSunLhx/OpenRV-Publish'
+
 
 def run(*args: str, **kwargs) -> str:
     if os.name == 'nt' and pathlib.Path(args[0]).name.lower() in ('git', 'git.exe'):
@@ -35,6 +38,7 @@ def source_metadata(repo: pathlib.Path) -> dict:
     patch_record = repo / '_release_work' / 'source-patches.json'
     return {
         "product": "OpenRV", "edition": "English / Simplified Chinese community build",
+        "publisher": PUBLISHER, "publisherUrl": PUBLISHER_URL,
         **identity, "sourceCommit": commit, "shortCommit": commit[:8],
         "releaseVersion": release_version, "releaseTag": tag,
         "ciBuildSystemPatches": json.loads(patch_record.read_text(encoding='utf-8'))['patches'] if patch_record.is_file() else [],

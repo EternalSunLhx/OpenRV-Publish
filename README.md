@@ -29,6 +29,8 @@
 
 Windows 安装包未使用发布者证书签名；macOS 使用 ad-hoc 签名，未做 Apple 公证。
 
+发布者为 EternalSunLhx。macOS 的 DMG 根目录和应用的 `Contents/Resources/PUBLISHER.txt` 包含中英文发布者说明及社区发行仓库、上游项目链接。
+
 ## 版本与来源
 
 Release 使用与官方一致的版本名称，例如 `v4.1.0`。**本仓库的发布 tag 标记的是发行工具快照**；官方原始 tag 对象、源码提交、补丁、资源和最终构建树记录在随包发布的来源清单中。GitHub 自动生成的 Source code ZIP/TAR 是本仓库的发行工具，不是 OpenRV 完整源码。

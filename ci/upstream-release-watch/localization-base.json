@@ -225,7 +225,7 @@
       "source": "ci/localized-release/package-macos.py",
       "destination": "ci/localized-release/package-macos.py",
       "mode": "100644",
-      "sha256": "250e4370bb18630c73e451bc89e3a88c58bf9f81507a924ffa1105b2fc6d997a",
+      "sha256": "490876a45e94c8b130fa18b9bac524fc8a3298e786f65e291175d8bea3907a64",
       "replace": false
     },
     {
@@ -288,7 +288,7 @@
       "source": "ci/localized-release/release_common.py",
       "destination": "ci/localized-release/release_common.py",
       "mode": "100644",
-      "sha256": "63df250e988c60bd21802e54872dee2619f5496c7eb5f3772ab22fe239454fc2",
+      "sha256": "9ae7fcf984111befe133f8676107ceb4811145096e7fe7e4895d23a2021706bb",
       "replace": false
     },
     {
