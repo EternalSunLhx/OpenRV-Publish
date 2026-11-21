@@ -61,7 +61,7 @@ class OfficialApi:
     def request(self, method: str, repository: str, suffix: str, payload=None):
         if repository not in (UPSTREAM, TARGET):
             raise ValueError('Unknown repository')
-        reads = (r'releases/latest|releases/tags/v[0-9.]+|git/ref/tags/v[0-9.]+|git/tags/[0-9a-f]{40}|'
+        reads = (r'releases/latest|releases\?per_page=100&page=[1-9][0-9]*|releases/tags/v[0-9.]+|git/ref/tags/v[0-9.]+|git/tags/[0-9a-f]{40}|'
                  r'releases/tags/v[0-9.]+|releases/[1-9][0-9]*|releases/[1-9][0-9]*/assets(?:\?[^\s]+)?')
         if method == 'GET' and payload is None and re.fullmatch(reads, suffix):
             pass

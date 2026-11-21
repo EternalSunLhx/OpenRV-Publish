@@ -1,0 +1,72 @@
+name: 复用现有安装包发布 (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: '三平台均成功、仅发布失败的原始构建 run ID（不重新编译）'
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: openrv-official-release-upload
+  cancel-in-progress: false
+
+jobs:
+  publish-existing:
+    name: Verify and publish existing three-platform packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONNOUSERSITE: '1'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify controller inventory and publication recovery tests
+        run: |
+          python3 -B tools/refresh_patch_manifest.py --check
+          python3 -B -m unittest discover -s ci/localized-release/tests -p 'test_publish_release.py' -v
+          python3 -B -m unittest discover -s ci/localized-release/tests -p 'test_resume_release.py' -v
+      - name: Authenticate original source run and exact artifact identities
+        id: source
+        run: python3 -B ci/localized-release/resume_release.py discover --source-run "$SOURCE_RUN_ID"
+      - name: Download original immutable build input
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.source.outputs.input_id }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/openrv-publication-recovery/input
+          merge-multiple: true
+          digest-mismatch: error
+      - name: Download unchanged native packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.source.outputs.package_ids }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/openrv-publication-recovery/packages
+          merge-multiple: false
+          digest-mismatch: error
+      - name: Reverify original source and all native gates then publish
+        run: python3 -B ci/localized-release/resume_release.py publish --source-run "$SOURCE_RUN_ID"
+      - name: Upload publication recovery receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: publication-recovery-receipt
+          path: |
+            ${{ runner.temp }}/openrv-publication-recovery/source-evidence.json
+            ${{ runner.temp }}/openrv-publication-recovery/publication-receipt.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -329,14 +329,46 @@ def publish_assets(repo: pathlib.Path, assets: pathlib.Path, plan: dict, api) ->
             raise ValueError('Official release changed before release publication')
         verify_publication_tag(api, release, checked_sha(plan['publication_commit']))
 
-    def read_release(expected_id=None):
-        status, record = api.request('GET', TARGET, 'releases/tags/' + release.tag)
-        if (status != 200 or not isinstance(record, dict) or record.get('tag_name') != release.tag
+    def validate_release(record, expected_id=None):
+        if (not isinstance(record, dict) or record.get('tag_name') != release.tag
                 or type(record.get('id')) is not int or record['id'] <= 0
                 or type(record.get('draft')) is not bool or type(record.get('prerelease')) is not bool
                 or (expected_id is not None and record['id'] != expected_id)):
             raise ValueError('Cannot verify the same release identity and publication state')
+        prefix = f'https://github.com/{TARGET}/releases/tag/'
+        allowed = re.escape(prefix + release.tag)
+        if record['draft']:
+            allowed += '|' + re.escape(prefix) + r'untagged-[0-9a-f]{20,64}'
+        if not isinstance(record.get('html_url'), str) or not re.fullmatch(allowed, record['html_url']):
+            raise ValueError('Release URL does not identify this repository and publication state')
         return record
+
+    def read_release(expected_id):
+        status, record = api.request('GET', TARGET, f'releases/{expected_id}')
+        if status != 200:
+            raise ValueError('Cannot read the bound release identity')
+        return validate_release(record, expected_id)
+
+    def discover_release():
+        # The by-tag REST endpoint finds published releases only. Authenticated
+        # listings include drafts; identify one exact pending tag, then bind ID.
+        found, seen = [], set()
+        for page in range(1, 101):
+            status, batch = api.request('GET', TARGET, f'releases?per_page=100&page={page}')
+            if status != 200 or not isinstance(batch, list) or len(batch) > 100:
+                raise ValueError('Cannot inspect published and draft releases')
+            for record in batch:
+                if (not isinstance(record, dict) or type(record.get('id')) is not int or record['id'] <= 0
+                        or not isinstance(record.get('tag_name'), str) or record['id'] in seen):
+                    raise ValueError('Release listing has invalid or duplicate identities')
+                seen.add(record['id'])
+                if record['tag_name'] == release.tag:
+                    found.append(validate_release(record)['id'])
+            if len(batch) < 100:
+                if len(found) > 1:
+                    raise ValueError('Multiple releases identify the requested tag; refusing ambiguous publication')
+                return read_release(found[0]) if found else None
+        raise ValueError('Release discovery pagination exceeded its safety bound')
 
     def read_assets(release_id):
         result = {}
@@ -373,34 +405,32 @@ def publish_assets(repo: pathlib.Path, assets: pathlib.Path, plan: dict, api) ->
     title = 'OpenRV ' + release.tag + ' 中英文版'
     expected = {name: ((assets / name).stat().st_size, 'sha256:' + sha256(assets / name)) for name in names}
 
-    def verify_asset(name, record):
+    def verify_asset(name, record, release_record):
+        allowed_urls = {f'https://github.com/{TARGET}/releases/download/{release.tag}/{name}'}
+        if release_record['draft']:
+            # A draft's temporary download tag is bound to its validated HTML
+            # URL and ID. It must become the canonical tag URL after publishing.
+            pending_tag = release_record['html_url'].rsplit('/', 1)[1]
+            allowed_urls.add(f'https://github.com/{TARGET}/releases/download/{pending_tag}/{name}')
         if (not isinstance(record, dict) or record.get('state') != 'uploaded'
                 or type(record.get('size')) is not int or record['size'] != expected[name][0]
                 or record.get('digest') != expected[name][1]
-                or record.get('browser_download_url') != f'https://github.com/{TARGET}/releases/download/{release.tag}/{name}'):
+                or record.get('browser_download_url') not in allowed_urls):
             raise ValueError('Asset lacks exact verified content; it will not be overwritten or published: ' + name)
 
-    status, existing = api.request('GET', TARGET, 'releases/tags/' + release.tag)
+    existing = discover_release()
     command = ['gh', 'release']
-    if status == 404:
+    if existing is None:
         subprocess.run(command + ['create', release.tag, '--repo', TARGET, '--verify-tag', '--draft',
                                   '--latest=false', '--title', title, '--notes-file', str(notes)], check=True, timeout=1800)
-        existing = read_release()
-        if existing['draft'] is not True:
+        existing = discover_release()
+        if existing is None or existing['draft'] is not True:
             raise ValueError('A new release must remain a draft until asset verification finishes')
-    elif status == 200:
-        # Re-read rather than trusting a release object that may already have changed.
-        if (not isinstance(existing, dict) or existing.get('tag_name') != release.tag
-                or type(existing.get('id')) is not int or existing['id'] <= 0):
-            raise ValueError('Existing release has no valid identity')
-        existing = read_release(existing['id'])
-    else:
-        raise ValueError('Cannot inspect existing official release')
     release_id = existing['id']
     existing_assets = read_assets(release_id)
     verified = set()
     for name in set(names).intersection(existing_assets):
-        verify_asset(name, existing_assets[name])
+        verify_asset(name, existing_assets[name], existing)
         verified.add(name)
     # Manifests are uploaded last so readers only discover a verified completed set.
     missing = [name for name in names if name not in verified]
@@ -415,7 +445,7 @@ def publish_assets(repo: pathlib.Path, assets: pathlib.Path, plan: dict, api) ->
     current = read_release(release_id)
     uploaded = read_assets(release_id)
     for name in names:
-        verify_asset(name, uploaded.get(name))
+        verify_asset(name, uploaded.get(name), current)
     higher_manifest = re.compile(re.escape('OpenRV-' + release.tag[1:])
                                  + r'-build\.([1-9][0-9]*)-(?:Windows-x64|macOS-(?:arm64|x86_64))\.build\.json')
     if any(record.get('state') == 'uploaded' and (match := higher_manifest.fullmatch(name))
@@ -449,6 +479,9 @@ def publish_assets(repo: pathlib.Path, assets: pathlib.Path, plan: dict, api) ->
     if (published['draft'] is not False or published['prerelease'] is not False
             or published.get('name') != title or published.get('body') != notes_text):
         raise ValueError('Release publication state or notes could not be verified')
+    published_assets = read_assets(release_id)
+    for name in names:
+        verify_asset(name, published_assets.get(name), published)
 
 
 def main() -> None:

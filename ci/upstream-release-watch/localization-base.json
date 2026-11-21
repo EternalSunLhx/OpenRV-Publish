@@ -36,7 +36,7 @@
       "source": "ci/WORKFLOWS.zh-CN.md",
       "destination": "ci/WORKFLOWS.zh-CN.md",
       "mode": "100644",
-      "sha256": "14d6a7d5e04f5160fbbd66cec4de8ed6fdec718bac92cc34c330dc27d865571c",
+      "sha256": "1d553fcf6cb446383197d6303d141f1297139572ffc54e849e01078cad44c657",
       "replace": false
     },
     {
@@ -225,7 +225,7 @@
       "source": "ci/localized-release/official_workspace.py",
       "destination": "ci/localized-release/official_workspace.py",
       "mode": "100644",
-      "sha256": "d3bfaa28b17c45a461c057896374d1a1b0a355d4fe2a8c12dbab950a085093b6",
+      "sha256": "de30ed145b8e480e9aa3b7000258c57d62dfab7241612e4a99d04afa5c31077f",
       "replace": false
     },
     {
@@ -260,7 +260,7 @@
       "source": "ci/localized-release/prepare_release.py",
       "destination": "ci/localized-release/prepare_release.py",
       "mode": "100644",
-      "sha256": "55815a6cdb33b9872a1b70e57d29fb3d59f5f2a7ed954d12ee5a5bc5b01fdde0",
+      "sha256": "cae0939cfe8c9323de815396023b70e2fcde064e79fd78b8bb99a83995e3f226",
       "replace": false
     },
     {
@@ -296,6 +296,13 @@
       "destination": "ci/localized-release/release_common.py",
       "mode": "100644",
       "sha256": "9ae7fcf984111befe133f8676107ceb4811145096e7fe7e4895d23a2021706bb",
+      "replace": false
+    },
+    {
+      "source": "ci/localized-release/resume_release.py",
+      "destination": "ci/localized-release/resume_release.py",
+      "mode": "100644",
+      "sha256": "52a31034667f39bb4197a0b9d733ef2a5cbf131e2f5bebc40ae3ee53fc3e128f",
       "replace": false
     },
     {
@@ -498,7 +505,7 @@
       "source": "ci/localized-release/tests/test_publish_release.py",
       "destination": "ci/localized-release/tests/test_publish_release.py",
       "mode": "100644",
-      "sha256": "fbe6c0f0d671789d0d06a974a6e5a7f221afa536ae7a9350f125055278b38163",
+      "sha256": "e491758e2bb9e44985e9cc141353873865f3e91060401f5320f7469e688e265c",
       "replace": false
     },
     {
@@ -520,6 +527,13 @@
       "destination": "ci/localized-release/tests/test_release_notes.py",
       "mode": "100644",
       "sha256": "e291611de9e9a1d83ca9505e9912dd7e1513bef0c807f7f10ce82243255efb8c",
+      "replace": false
+    },
+    {
+      "source": "ci/localized-release/tests/test_resume_release.py",
+      "destination": "ci/localized-release/tests/test_resume_release.py",
+      "mode": "100644",
+      "sha256": "118d1e874c4d12833b21bcf92fd2f096ce6cd354fb197fc0f744e5e4c0f55991",
       "replace": false
     },
     {

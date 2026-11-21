@@ -20,7 +20,8 @@ class ReleaseServer:
         self.owner = owner
         self.exists = exists
         self.release = {'id': 123, 'tag_name': owner.release.tag, 'draft': draft, 'prerelease': False,
-                        'html_url': f'https://github.com/{workspace.TARGET}/releases/tag/{owner.release.tag}',
+                        'html_url': f'https://github.com/{workspace.TARGET}/releases/tag/'
+                                    + ('untagged-' + 'a' * 20 if draft else owner.release.tag),
                         'name': owner.title, 'body': owner.notes}
         self.assets = {record['name']: copy.deepcopy(record) for record in records}
         self.events = []
@@ -34,19 +35,38 @@ class ReleaseServer:
         self.source_changed = False
         self.tag_changed = False
         self.latest = None
+        self.release_pages = None
+        self.release_read_change = None
+        self.keep_temporary_asset_urls = False
+        self.post_publish_asset_change = None
 
     def request(self, method, repository, suffix, payload=None):
         if (method, repository, payload) != ('GET', workspace.TARGET, None):
             raise AssertionError('Only fixed repository GETs may use OfficialApi')
         if suffix == 'releases/tags/' + self.owner.release.tag:
+            self.events.append('read-release-by-tag')
+            # GitHub's by-tag endpoint cannot discover the draft pending tag.
+            return (200, copy.deepcopy(self.release)) if self.exists and not self.release['draft'] else (404, {})
+        if suffix.startswith('releases?per_page=100&page='):
+            self.events.append('list-releases')
+            page = int(suffix.rsplit('=', 1)[1])
+            if self.release_pages is not None:
+                return 200, copy.deepcopy(self.release_pages.get(page, []))
+            return 200, [copy.deepcopy(self.release)] if self.exists and page == 1 else []
+        if suffix == 'releases/123':
             self.events.append('read-release')
-            return (200, copy.deepcopy(self.release)) if self.exists else (404, {})
+            record = copy.deepcopy(self.release)
+            if self.release_read_change:
+                self.release_read_change(record)
+            return (200, record) if self.exists else (404, {})
         if suffix == 'releases/123/assets?per_page=100&page=1':
             self.events.append('read-assets')
             self.asset_reads += 1
             records = copy.deepcopy(list(self.assets.values()))
             if self.asset_reads >= 2 and self.final_asset_change:
                 self.final_asset_change(records)
+            if not self.release['draft'] and self.post_publish_asset_change:
+                self.post_publish_asset_change(records)
             return 200, records
         if suffix == 'releases/latest':
             self.events.append('read-latest')
@@ -80,6 +100,8 @@ class ReleaseServer:
             self.events.append('create-draft')
             assert '--draft' in command and '--verify-tag' in command and '--latest=false' in command
             assert not any(str(self.owner.assets / name) in command for name in self.owner.names)
+            if self.exists:
+                raise subprocess.CalledProcessError(1, command)
             self.exists = True
         elif operation == 'upload':
             self.uploads += 1
@@ -92,6 +114,9 @@ class ReleaseServer:
                 name = Path(path).name
                 assert name not in self.assets
                 self.assets[name] = self.owner.record(name)
+                if self.release['draft']:
+                    pending = self.release['html_url'].rsplit('/', 1)[1]
+                    self.assets[name]['browser_download_url'] = f'https://github.com/{workspace.TARGET}/releases/download/{pending}/{name}'
                 if self.fail_upload == self.uploads:
                     raise subprocess.CalledProcessError(1, command)
         elif operation == 'edit':
@@ -99,7 +124,11 @@ class ReleaseServer:
             assert '--draft=false' in command and '--prerelease=false' in command and '--verify-tag' in command
             assert command[command.index('--tag') + 1] == self.owner.release.tag
             self.release.update(draft=False, prerelease=False,
-                                name=command[command.index('--title') + 1], body=self.owner.notes)
+                                name=command[command.index('--title') + 1], body=self.owner.notes,
+                                html_url=f'https://github.com/{workspace.TARGET}/releases/tag/{self.owner.release.tag}')
+            if not self.keep_temporary_asset_urls:
+                for name, record in self.assets.items():
+                    record['browser_download_url'] = f'https://github.com/{workspace.TARGET}/releases/download/{self.owner.release.tag}/{name}'
         else:
             raise AssertionError(operation)
 
@@ -143,9 +172,11 @@ class PublishReleaseTests(unittest.TestCase):
         events = server.events
         self.assertLess(events.index('create-draft'), events.index('upload-other'))
         self.assertLess(events.index('upload-other'), events.index('upload-manifests'))
-        last_read = max(index for index, event in enumerate(events) if event == 'read-assets')
+        publication = events.index('publish')
+        last_read = max(index for index, event in enumerate(events[:publication]) if event == 'read-assets')
         self.assertGreater(last_read, events.index('upload-manifests'))
         self.assertGreater(events.index('publish'), last_read)
+        self.assertIn('read-assets', events[publication + 1:])
         self.assertEqual(events[events.index('publish') - 2:events.index('publish')], ['verify-upstream', 'verify-tag'])
         self.assertEqual(len(server.assets), 15)
         self.assertIn('--latest=true', server.commands[-1])
@@ -168,6 +199,68 @@ class PublishReleaseTests(unittest.TestCase):
         uploaded = {Path(path).name for command in server.commands if command[2] == 'upload' for path in command[6:]}
         self.assertEqual(uploaded, set(self.names) - retained)
         self.assertNotIn('create', [command[2] for command in server.commands])
+
+    def test_existing_draft_is_found_by_listing_then_read_only_by_bound_id(self):
+        server = ReleaseServer(self, exists=True)
+        self.assertEqual(server.request('GET', workspace.TARGET, 'releases/tags/' + self.release.tag)[0], 404)
+        server.events.clear()
+        self.publish(server)
+        self.assertNotIn('create', [command[2] for command in server.commands])
+        self.assertNotIn('read-release-by-tag', server.events)
+        self.assertIn('list-releases', server.events)
+        self.assertIn('read-release', server.events)
+        self.assertFalse(server.release['draft'])
+        for name, record in server.assets.items():
+            self.assertEqual(record['browser_download_url'], self.record(name)['browser_download_url'])
+
+    def test_discovery_checks_all_pages_and_rejects_duplicate_or_malformed_matches(self):
+        unrelated = [{'id': 1000 + index, 'tag_name': f'v9.0.{index}'} for index in range(100)]
+        server = ReleaseServer(self, exists=True)
+        server.release_pages = {1: unrelated, 2: [server.release]}
+        self.publish(server)
+        self.assertEqual(server.events.count('list-releases'), 2)
+        for rows in ([server.release, server.release], [server.release, {**server.release, 'id': 124}],
+                     [{**server.release, 'id': True}], [{**server.release, 'id': 0}],
+                     [{**server.release, 'tag_name': None}], [{**server.release, 'draft': 1}],
+                     [{**server.release, 'prerelease': None}]):
+            bad = ReleaseServer(self, exists=True)
+            bad.release_pages = {1: rows}
+            with self.subTest(rows=rows), self.assertRaises(ValueError):
+                self.publish(bad)
+            self.assertEqual(bad.commands, [])
+
+    def test_id_bound_read_rejects_identity_state_or_repository_url_changes(self):
+        for changes in ({'id': 124}, {'id': True}, {'tag_name': 'v4.0.3'}, {'draft': None},
+                        {'prerelease': 1}, {'html_url': 'https://foreign.invalid/draft'},
+                        {'html_url': f'https://github.com/{workspace.TARGET}/releases/tag/untagged-../foreign'}):
+            server = ReleaseServer(self, exists=True)
+            server.release_read_change = lambda record, changes=changes: record.update(changes)
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.publish(server)
+            self.assertEqual(server.commands, [])
+
+    def test_draft_accepts_only_its_own_temporary_asset_url_and_stable_requires_canonical_url(self):
+        server = ReleaseServer(self, exists=True)
+        record = self.record(self.names[0])
+        record['browser_download_url'] = f'https://github.com/{workspace.TARGET}/releases/download/untagged-' + 'b' * 20 + '/' + self.names[0]
+        server.assets[record['name']] = record
+        with self.assertRaisesRegex(ValueError, 'not be overwritten'):
+            self.publish(server)
+        self.assertEqual(server.commands, [])
+        server = ReleaseServer(self)
+        server.keep_temporary_asset_urls = True
+        with self.assertRaisesRegex(ValueError, 'not be overwritten or published'):
+            self.publish(server)
+        self.assertFalse(server.release['draft'])
+        self.assertEqual(server.asset_reads, 3)
+
+    def test_post_publication_digest_or_asset_loss_is_still_reported(self):
+        for mutation in (lambda rows: rows.pop(), lambda rows: rows[0].update(digest='sha256:' + '0' * 64)):
+            server = ReleaseServer(self)
+            server.post_publish_asset_change = mutation
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'not be overwritten or published'):
+                self.publish(server)
+            self.assertEqual(server.asset_reads, 3)
 
     def test_remote_post_upload_corruption_or_missing_file_never_publishes(self):
         for changes in ({'digest': 'sha256:' + '0' * 64}, {'digest': None}, {'size': 0},

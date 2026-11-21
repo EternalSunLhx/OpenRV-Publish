@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | [官方稳定版监控与构建 (Auto) (Manual)](https://github.com/EternalSunLhx/OpenRV-Publish/actions/workflows/upstream-release-watch.yml) | 每小时 UTC 第23分钟，也可手动 | 检查官方最新稳定 Release，去重后派发打包 |
 | [官方版本中英文打包与发布 (Auto) (Manual)](https://github.com/EternalSunLhx/OpenRV-Publish/actions/workflows/localized-release.yml) | 监控派发，或手动 | 固定官方 tag 和本仓库维护快照，三平台编译、验证、打包、自动发布 |
+| [复用现有安装包发布 (Manual)](https://github.com/EternalSunLhx/OpenRV-Publish/actions/workflows/resume-publication.yml) | 手动 | 三平台已成功、仅发布失败时，复用原产物并重新校验后发布，不编译软件 |
 | [安装器打开方式验证 (Manual)](https://github.com/EternalSunLhx/OpenRV-Publish/actions/workflows/installer-registration.yml) | 手动 | 快速检查 Windows 安装注册、中文路径、打开方式与卸载，不编译完整软件 |
 | [构建错误日志摘要 (Manual)](https://github.com/EternalSunLhx/OpenRV-Publish/actions/workflows/build-diagnostics.yml) | 手动 | 输入本仓库 job ID，读取完整日志并显示有大小上限的错误上下文 |
 | [macOS 原生语言提示框诊断 (Manual)](https://github.com/EternalSunLhx/OpenRV-Publish/actions/workflows/macos-language-dialog-diagnostic.yml) | 手动 | 检查原生语言选择和重启提示框相关的小型测试 |
@@ -35,6 +36,10 @@
 平台产物先出现在该次打包任务底部的 Artifacts，当前保留14天。所有平台通过原生运行、语言持久化、音视频解码、安装器或应用包校验之后，汇总任务核对全部文件并上传。再次核对远端文件状态、大小、SHA-256、下载地址与来源身份后，才公开到 [Releases](https://github.com/EternalSunLhx/OpenRV-Publish/releases)。
 
 新 Release 上传中断或校验失败会保持草稿。后续成功的同版本构建追加独立文件，不覆盖旧文件；发布阶段串行执行，旧版本不会抢占较新版本的 Latest。
+
+如果三平台任务均已成功，仅最后的发布失败，可运行“复用现有安装包发布”，填写原构建地址 `actions/runs/` 后的数字 ID。该入口使用当前维护分支的发布器修复，同时保留原源码快照、内部产品编号和安装包；不会修改原构建的结果记录。恢复时重新检查原轮次的五个前置/平台任务、四个 artifact 的 ID 和 SHA-256、源码组成、所有原生验收及安装包校验值。修复后的发布器按 Release ID 识别草稿，全部十五个文件上传并校验后才公开。
+
+此入口目前接受原始执行（run attempt 为 1），要求原 artifacts 尚未过期；恢复流程自身可以重跑。发布恢复回执另存为 artifact，区分原编译提交与本次发布器提交。原草稿及已上传且内容一致的文件可继续使用。
 
 | 平台 | 文件类型 |
 | --- | --- |
