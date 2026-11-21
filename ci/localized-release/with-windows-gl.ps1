@@ -1,7 +1,13 @@
 #requires -Version 7
 <# Ephemeral CI OpenGL provider; never copies a DLL into a runtime or package. #>
 [CmdletBinding()]
-param([Parameter(Mandatory)][ValidateSet('Readiness','Package')][string]$Task)
+param(
+    [Parameter(Mandatory)][ValidateSet('Readiness','Package','PostPackage')][string]$Task,
+    [string]$RuntimeDir,
+    [string]$WorkDir,
+    [ValidateSet('all','rotation-playback','preferences-owner-close')][string]$TestCase = 'all',
+    [ValidateSet('both','en','zh_CN')][string]$Language = 'both'
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows -or $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows') {
@@ -58,6 +64,15 @@ function Invoke-OpenRvScopedGlProvider([string]$Provider,[string]$Sha256,[Collec
 
 $expectedSha256 = 'b04de4541863bc7d8879040a78889c4849c1b1da2784c4630f734c146c2998ce'
 $runnerTemp = (Resolve-Path -LiteralPath $env:RUNNER_TEMP).Path.TrimEnd('\')
+if ($Task -eq 'PostPackage') {
+    if (-not $RuntimeDir -or -not $WorkDir) { throw 'PostPackage requires the extracted runtime and a new diagnostics directory.' }
+    $RuntimeDir = (Resolve-Path -LiteralPath $RuntimeDir).Path
+    $WorkDir = [IO.Path]::GetFullPath($WorkDir)
+    if (-not $RuntimeDir.StartsWith($runnerTemp + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        -not $WorkDir.StartsWith($runnerTemp + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        $WorkDir -eq $RuntimeDir -or $WorkDir.StartsWith($RuntimeDir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        (Test-Path -LiteralPath $WorkDir)) { throw 'PostPackage paths must be isolated below RUNNER_TEMP with a new work directory.' }
+}
 $qt = (Resolve-Path -LiteralPath $env:QT_ROOT_DIR).Path.TrimEnd('\')
 $source = Join-Path $qt 'bin\opengl32sw.dll'
 $sourceItem = Get-Item -LiteralPath $source
@@ -73,9 +88,12 @@ if ((Get-FileHash -LiteralPath $provider -Algorithm SHA256).Hash.ToLowerInvarian
 $script = Join-Path $PSScriptRoot $(if ($Task -eq 'Readiness') { 'test-windows-gl-readiness.ps1' } else { 'package-windows.ps1' })
 $report = [ordered]@{status='failed';task=$Task;mode='hosted-software';provider=$provider;providerSha256=$expectedSha256;source=$source;providerCopiedIntoRuntime=$false}
 function Assert-NoRuntimeProviderAlias {
-    if ($Task -ne 'Package') { return }
-    $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
-    foreach ($runtimeRoot in @((Join-Path $repo '_install_release'),(Join-Path $env:OPENRV_BUILD_DIR 'stage\app'))) {
+    if ($Task -eq 'PostPackage') { $runtimeRoots = @($RuntimeDir) }
+    elseif ($Task -eq 'Package') {
+        $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
+        $runtimeRoots = @((Join-Path $repo '_install_release'),(Join-Path $env:OPENRV_BUILD_DIR 'stage\app'))
+    } else { return }
+    foreach ($runtimeRoot in $runtimeRoots) {
         if (Get-ChildItem -LiteralPath $runtimeRoot -Recurse -File -Filter 'opengl32.dll') {
             throw 'A CI-only OpenGL alias must never be present in a runtime or stage tree.'
         }
@@ -83,7 +101,12 @@ function Assert-NoRuntimeProviderAlias {
 }
 try {
     Assert-NoRuntimeProviderAlias
-    Invoke-OpenRvScopedGlProvider $provider $expectedSha256 $report { & $script }
+    Invoke-OpenRvScopedGlProvider $provider $expectedSha256 $report {
+        if ($Task -eq 'PostPackage') {
+            & python -B (Join-Path $PSScriptRoot 'post_package_smoke.py') --runtime $RuntimeDir --work $WorkDir --case $TestCase --language $Language
+            if ($LASTEXITCODE -ne 0) { throw 'Independent post-package functional tests failed; see their diagnostics.' }
+        } else { & $script }
+    }
     Assert-NoRuntimeProviderAlias
     $report.status = 'passed'
 } catch {
@@ -91,5 +114,9 @@ try {
     throw
 } finally {
     $report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $providerDir 'report.json') -Encoding utf8
+    if ($Task -eq 'PostPackage') {
+        if (-not (Test-Path -LiteralPath $WorkDir)) { [void](New-Item -ItemType Directory -Path $WorkDir) }
+        $report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $WorkDir 'gl-provider.json') -Encoding utf8
+    }
     Write-Host ('Scoped GL provider report: ' + (Join-Path $providerDir 'report.json'))
 }

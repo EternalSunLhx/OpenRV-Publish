@@ -262,6 +262,9 @@ class PublishExistingTests(unittest.TestCase):
                     mock.patch.object(resume, 'verify_materialized') as verify, \
                     mock.patch.object(resume, 'publish_assets') as publish, \
                     mock.patch.object(resume.subprocess, 'run', side_effect=command) as run:
+                publish.return_value = {'status': 'published', 'requestedBuildNumber': 35,
+                                        'publishedBuildNumber': 35, 'releaseTag': 'v4.1.0',
+                                        'releaseId': 123, 'assetCount': 12}
                 yield {'root': root, 'repo': repo, 'evidence': evidence, 'plan': plan, 'raw': raw, 'current': current,
                        'source_check': source_check, 'input_check': input_check, 'materialize': materialize,
                        'verify': verify, 'publish': publish, 'run': run}
@@ -286,9 +289,28 @@ class PublishExistingTests(unittest.TestCase):
             f['verify'].assert_called_once_with(source, f['plan'], b'', expected_snapshot=SOURCE_SHA, expected_build=35)
             f['publish'].assert_called_once()
             self.assertEqual(f['publish'].call_args.args[:3], (source, f['root'] / 'assets', f['plan']))
+            self.assertEqual(f['publish'].call_args.kwargs, {'replace_legacy_v410': False})
             receipt = json.loads((f['root'] / 'publication-receipt.json').read_text())
             self.assertEqual((receipt['controller_sha'], receipt['publication_run_id']), (CONTROLLER_SHA, '98765'))
             self.assertFalse(receipt['native_rebuild'])
+
+    def test_legacy_migration_requires_explicit_recovery_opt_in(self):
+        with self.fixture() as f:
+            resume.publish_existing(f['repo'], f['root'], f['evidence'], replace_legacy_v410=True)
+            self.assertEqual(f['publish'].call_args.kwargs, {'replace_legacy_v410': True})
+            receipt = json.loads((f['root'] / 'publication-receipt.json').read_text())
+            self.assertTrue(receipt['replace_legacy_v410'])
+
+    def test_retaining_newer_publication_does_not_claim_requested_build_was_published(self):
+        with self.fixture() as f:
+            f['publish'].return_value.update(status='skipped_newer', publishedBuildNumber=36)
+            resume.publish_existing(f['repo'], f['root'], f['evidence'])
+            receipt = json.loads((f['root'] / 'publication-receipt.json').read_text())
+            self.assertEqual(receipt['status'], 'skipped_newer')
+            self.assertEqual(receipt['publication']['publishedBuildNumber'], 36)
+            summary = (f['root'] / 'summary.md').read_text()
+            self.assertIn('requested build 35 was not published', summary)
+            self.assertNotIn('Published v4.1.0', summary)
 
     def test_original_assembler_failure_never_calls_fixed_publisher(self):
         with self.fixture(failure='assembler') as f, self.assertRaises(subprocess.CalledProcessError):

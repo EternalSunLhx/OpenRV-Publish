@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "repository": "EternalSunLhx/OpenRV-Publish",
+  "releaseId": 453727799,
+  "tag": "v4.1.0",
+  "buildNumber": 35,
+  "assets": [
+    {
+      "id": 775799488,
+      "name": "OpenRV-4.1.0-build.35-generated-localization.patch.zip",
+      "size": 156,
+      "digest": "sha256:25684ad4e5c5417a1046b6e0b9ec08ed36277cf2cc01285b0f3b1ba2b37dcd28"
+    },
+    {
+      "id": 775801377,
+      "name": "OpenRV-4.1.0-build.35-macOS-arm64.build.json",
+      "size": 78126,
+      "digest": "sha256:b071650eed0ad3d0047c8c55955e09989cebd9fa86e3a69fbc059907ed7e9aab"
+    },
+    {
+      "id": 775799500,
+      "name": "OpenRV-4.1.0-build.35-macOS-arm64.dmg",
+      "size": 687224808,
+      "digest": "sha256:39aea9384311e470335195f5f00382269bd80bff4fbbba73ad134e63657d6213"
+    },
+    {
+      "id": 775799513,
+      "name": "OpenRV-4.1.0-build.35-macOS-arm64.sha256.txt",
+      "size": 319,
+      "digest": "sha256:d2d5fa0f861f84cb45a6648ab8ecbf82fc8ad69cfe9189c70c87b53793d68117"
+    },
+    {
+      "id": 775799520,
+      "name": "OpenRV-4.1.0-build.35-macOS-arm64.zip",
+      "size": 510506945,
+      "digest": "sha256:0fb6bf2624a23fc7cbfca0225611d60d4670c5375a76b8cd1554a7fd68c98b49"
+    },
+    {
+      "id": 775801376,
+      "name": "OpenRV-4.1.0-build.35-macOS-x86_64.build.json",
+      "size": 79084,
+      "digest": "sha256:c107de1c500d10588aa0ff6bf9a950a8d6d0956f6d7153feec17b2956c385ce6"
+    },
+    {
+      "id": 775799535,
+      "name": "OpenRV-4.1.0-build.35-macOS-x86_64.dmg",
+      "size": 735066611,
+      "digest": "sha256:b50c73ba7da984e07c0f3ed57a321bc4ae3507e951188062323975425355e52f"
+    },
+    {
+      "id": 775800395,
+      "name": "OpenRV-4.1.0-build.35-macOS-x86_64.sha256.txt",
+      "size": 322,
+      "digest": "sha256:13ae41fd0cbfb3b285626e68c57098367dcf3ad6f250f341ae865dfeb8af071d"
+    },
+    {
+      "id": 775800419,
+      "name": "OpenRV-4.1.0-build.35-macOS-x86_64.zip",
+      "size": 522604916,
+      "digest": "sha256:1fc71e8c13bcde51797c3f793103006fcd91b4044bb39393d100985f6d7f27d9"
+    },
+    {
+      "id": 775800457,
+      "name": "OpenRV-4.1.0-build.35-source.provenance.json",
+      "size": 1081,
+      "digest": "sha256:edd9664e1bdd269940ccdd0b8223454e94242e83297111083a740e73a6b14611"
+    },
+    {
+      "id": 775800484,
+      "name": "OpenRV-4.1.0-build.35-source.sha256.txt",
+      "size": 232,
+      "digest": "sha256:a1dc7979cec06c45ac27436fba7b54e40d3cd4617a78c00bf13855c5c5ad079e"
+    },
+    {
+      "id": 775799495,
+      "name": "OpenRV-4.1.0-build.35-Windows-x64-Portable.zip",
+      "size": 404498752,
+      "digest": "sha256:aa9bc6a4dbd257138ef906e74a7a791278ac108fdfab46a972f9dc789efc2af7"
+    },
+    {
+      "id": 775799498,
+      "name": "OpenRV-4.1.0-build.35-Windows-x64-Setup.exe",
+      "size": 272639872,
+      "digest": "sha256:ebff0d3a4003a6ce6d10457f2ee44e0d8ec4ce4675e934b89993f6990ac9989d"
+    },
+    {
+      "id": 775801375,
+      "name": "OpenRV-4.1.0-build.35-Windows-x64.build.json",
+      "size": 8720,
+      "digest": "sha256:bfd7a824c7518d4c92a76648dbd34c320e23b7e67c187de60e939dcaefb99f69"
+    },
+    {
+      "id": 775799487,
+      "name": "OpenRV-4.1.0-build.35-Windows-x64.sha256.txt",
+      "size": 337,
+      "digest": "sha256:1eed4f700140d12d126374ad9614c864d8f4256ebaee68fab144ab2ed8fb49be"
+    }
+  ]
+}

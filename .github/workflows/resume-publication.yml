@@ -7,6 +7,11 @@ on:
         description: '三平台均成功、仅发布失败的原始构建 run ID（不重新编译）'
         required: true
         type: string
+      replace_legacy_v410:
+        description: '仅恢复 v4.1.0 原 build35 附件迁移；必须复用含新版更新检查器的原构建'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   actions: read
@@ -26,6 +31,7 @@ jobs:
       SOURCE_RUN_ID: ${{ inputs.source_run_id }}
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONNOUSERSITE: '1'
+      ORV_REPLACE_LEGACY_V410: ${{ inputs.replace_legacy_v410 && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

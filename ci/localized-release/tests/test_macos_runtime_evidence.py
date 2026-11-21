@@ -28,7 +28,7 @@ class RuntimeEvidenceTests(unittest.TestCase):
         self.persistence.mkdir(parents=True)
         self.diagnostics = Path(self.temporary.name).resolve() / 'DiagnosticReports'
         self.diagnostics.mkdir()
-        self.executable = self.repo / '_install_release/RV.app/Contents/MacOS/rv'
+        self.executable = self.repo / '_install_release/OpenRV.app/Contents/MacOS/rv'
         self.executable.parent.mkdir(parents=True)
         self.executable.write_bytes(b'owned fixture')
         self.now = datetime.datetime.now(datetime.timezone.utc)
@@ -62,6 +62,7 @@ class RuntimeEvidenceTests(unittest.TestCase):
         other_pid = dict(self.crash, pid=456)
         self.ips('rv-other-pid.ips', other_pid)
         self.ips('rv-other-path.ips', dict(self.crash, procPath='/another/RV.app/Contents/MacOS/rv'))
+        self.ips('rv-old-name.ips', dict(self.crash, procPath=str(self.repo / '_install_release/RV.app/Contents/MacOS/rv')))
         self.ips('rv-anonymous-path.ips', dict(self.crash, procPath='/Users/USER/RV.app/Contents/MacOS/rv'))
         self.ips('rv-previous-run.ips', age=500)
         self.ips('unrelated-app.ips')

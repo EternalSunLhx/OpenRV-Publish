@@ -15,6 +15,12 @@
       "path": "patches/annotate-beta.patch",
       "sha256": "b00a458ac2e294d2cccd6a97f9809d8b4682e86ed1d5d89938621604ce6b150b",
       "optional_component": "src/plugins/rv-packages/annotate_beta"
+    },
+    {
+      "path": "patches/openrv-preferences-lifetime.patch",
+      "sha256": "7653ca9a303c28da0357c7c5f6931f43fd3ce70de8670b22d31e9e76f0cb0754",
+      "optional_component": null,
+      "condition": "preferences-lifetime-v1"
     }
   ],
   "owned_files": [
@@ -36,7 +42,7 @@
       "source": "ci/WORKFLOWS.zh-CN.md",
       "destination": "ci/WORKFLOWS.zh-CN.md",
       "mode": "100644",
-      "sha256": "1d553fcf6cb446383197d6303d141f1297139572ffc54e849e01078cad44c657",
+      "sha256": "a4358f21bc58c9374d70bfbeead60803cb8ef6f3377817cff76abf98156a3bcb",
       "replace": false
     },
     {
@@ -50,7 +56,7 @@
       "source": "ci/localized-release/README.md",
       "destination": "ci/localized-release/README.md",
       "mode": "100644",
-      "sha256": "c9731cc7c9c0d276941a8bc52cc089a49ea24b29c3dff4a8250d6609a1013d7d",
+      "sha256": "6e3751b6a2f7931927a935e9bad8a1be5a697e4ca726360f4fee9b07a3219acc",
       "replace": false
     },
     {
@@ -64,7 +70,7 @@
       "source": "ci/localized-release/assemble_release.py",
       "destination": "ci/localized-release/assemble_release.py",
       "mode": "100644",
-      "sha256": "c152b337f4ba856bfca13e05734aaffbf1d399973685cba12c2052ca0c49ac65",
+      "sha256": "3618498391aa422b01e86d4d3c8da733cdbd0cc4e5d83dcebffd5793c22fd4e0",
       "replace": false
     },
     {
@@ -99,7 +105,7 @@
       "source": "ci/localized-release/collect_macos_runtime_evidence.py",
       "destination": "ci/localized-release/collect_macos_runtime_evidence.py",
       "mode": "100644",
-      "sha256": "660f07e1d38acc8b49871441a4d9496fe351eb25486090e771063c0c81b377d0",
+      "sha256": "bfe8da89c292c8eb61b08f5759514dea7f9560f29e539afce2ea4aa66d0629c0",
       "replace": false
     },
     {
@@ -114,6 +120,13 @@
       "destination": "ci/localized-release/dependency-hooks.cmake",
       "mode": "100644",
       "sha256": "ffcaa3de20b0f87e7e0d3caff4f184f05e1afd1d7b21012a6a093f7e87db07de",
+      "replace": false
+    },
+    {
+      "source": "ci/localized-release/download_test_package.py",
+      "destination": "ci/localized-release/download_test_package.py",
+      "mode": "100644",
+      "sha256": "754392821b5214d91203a86c7a9110a48a7640756b82e3aba5f751842b4ff52e",
       "replace": false
     },
     {
@@ -135,6 +148,13 @@
       "destination": "ci/localized-release/inspect_mixed_qt_artifact.py",
       "mode": "100644",
       "sha256": "fcff4343da28e020f98e95295da26fce0a8e536f5c3bfeedf6acea76582d1041",
+      "replace": false
+    },
+    {
+      "source": "ci/localized-release/legacy-v4.1.0-build35-assets.json",
+      "destination": "ci/localized-release/legacy-v4.1.0-build35-assets.json",
+      "mode": "100644",
+      "sha256": "b346bc1ab942bab4dcddb16803940fdeeb466debd86546f6eee47a166087fd04",
       "replace": false
     },
     {
@@ -225,14 +245,14 @@
       "source": "ci/localized-release/official_workspace.py",
       "destination": "ci/localized-release/official_workspace.py",
       "mode": "100644",
-      "sha256": "de30ed145b8e480e9aa3b7000258c57d62dfab7241612e4a99d04afa5c31077f",
+      "sha256": "1373575e4a6b02e122908aa0e85e378837c518fc7f186d892b1b37dd1832cda1",
       "replace": false
     },
     {
       "source": "ci/localized-release/package-macos.py",
       "destination": "ci/localized-release/package-macos.py",
       "mode": "100644",
-      "sha256": "4f449c75a5b73e52ead91a6088d67fdb6fef3eaf1b74911a2ec853f6086d0bb0",
+      "sha256": "33d5bf827a4bb87df38ce18ee0ff3c1ab305993abe85fdfce59686958945b0bc",
       "replace": false
     },
     {
@@ -240,6 +260,13 @@
       "destination": "ci/localized-release/package-windows.ps1",
       "mode": "100644",
       "sha256": "1a98cfba5fa6d36ea4fa1251a2e4b5d6107663ad95236ffb33da0e84b1cbec6a",
+      "replace": false
+    },
+    {
+      "source": "ci/localized-release/post_package_smoke.py",
+      "destination": "ci/localized-release/post_package_smoke.py",
+      "mode": "100644",
+      "sha256": "d49ae19243aadb5687b899279446f54d9ee645fbab9ad60c8718d21ae7375e96",
       "replace": false
     },
     {
@@ -260,7 +287,14 @@
       "source": "ci/localized-release/prepare_release.py",
       "destination": "ci/localized-release/prepare_release.py",
       "mode": "100644",
-      "sha256": "cae0939cfe8c9323de815396023b70e2fcde064e79fd78b8bb99a83995e3f226",
+      "sha256": "63163928189a26becec2ddbd348cb20ee31021ccea142bb16314b89cb7c5da54",
+      "replace": false
+    },
+    {
+      "source": "ci/localized-release/public_assets.py",
+      "destination": "ci/localized-release/public_assets.py",
+      "mode": "100644",
+      "sha256": "1cea2d752923e8273e6d463c6a1f4a897e72108cc31dcc8e693ad109633f96e9",
       "replace": false
     },
     {
@@ -302,7 +336,7 @@
       "source": "ci/localized-release/resume_release.py",
       "destination": "ci/localized-release/resume_release.py",
       "mode": "100644",
-      "sha256": "52a31034667f39bb4197a0b9d733ef2a5cbf131e2f5bebc40ae3ee53fc3e128f",
+      "sha256": "111a0e3434cf09be2be89fc9e843ee5f06079b2c83c471b6c8549bc4fec8cf44",
       "replace": false
     },
     {
@@ -359,6 +393,20 @@
       "destination": "ci/localized-release/tests/test_aac_runtime_smoke.py",
       "mode": "100644",
       "sha256": "870906a88cf0f00724a539d3a9ee13be289340072d004f261489d200a1d31880",
+      "replace": false
+    },
+    {
+      "source": "ci/localized-release/tests/test_conditional_patches.py",
+      "destination": "ci/localized-release/tests/test_conditional_patches.py",
+      "mode": "100644",
+      "sha256": "3eb8e3a69d862efabdc5d44c4d2cfe5adff76033314c3cbf02d02b7fc4d6df4c",
+      "replace": false
+    },
+    {
+      "source": "ci/localized-release/tests/test_download_test_package.py",
+      "destination": "ci/localized-release/tests/test_download_test_package.py",
+      "mode": "100644",
+      "sha256": "51237630c915cc81a6a0a6d802a4d16bdb3f664c317302353bb27a18df50bf2c",
       "replace": false
     },
     {
@@ -449,7 +497,7 @@
       "source": "ci/localized-release/tests/test_macos_runtime_evidence.py",
       "destination": "ci/localized-release/tests/test_macos_runtime_evidence.py",
       "mode": "100644",
-      "sha256": "58284ad73e4787a42c7905bdc0185afc8474fd3fdd27f26f01374802e881aa0f",
+      "sha256": "b2aeac28846837471b4a570fe88b0dbbaf879eda58385b453014d2cccc522761",
       "replace": false
     },
     {
@@ -484,14 +532,21 @@
       "source": "ci/localized-release/tests/test_patch_manifest.py",
       "destination": "ci/localized-release/tests/test_patch_manifest.py",
       "mode": "100644",
-      "sha256": "bdf74be47a1304b6fbeb6a085f352f9533c9881292d174be0e3fa5c12158301c",
+      "sha256": "1f9bc3564bd6cb3685d2dff3a19c1275a4062cea3e6489474525ab1496e79ce4",
+      "replace": false
+    },
+    {
+      "source": "ci/localized-release/tests/test_post_package_smoke.py",
+      "destination": "ci/localized-release/tests/test_post_package_smoke.py",
+      "mode": "100644",
+      "sha256": "e176c7520bf208569881b02469d40fa20d725c820d7ffb0c3247154d7395a824",
       "replace": false
     },
     {
       "source": "ci/localized-release/tests/test_prepare_release.py",
       "destination": "ci/localized-release/tests/test_prepare_release.py",
       "mode": "100644",
-      "sha256": "c20d4c4413d8b2489f9458c673e4400230c66ec4dbd6f7594686e7a079135c85",
+      "sha256": "e5a80ff803caef06a57ec200629c51192ce7c643715c0d3b986a547dd4d5ec8f",
       "replace": false
     },
     {
@@ -505,7 +560,7 @@
       "source": "ci/localized-release/tests/test_publish_release.py",
       "destination": "ci/localized-release/tests/test_publish_release.py",
       "mode": "100644",
-      "sha256": "e491758e2bb9e44985e9cc141353873865f3e91060401f5320f7469e688e265c",
+      "sha256": "59f38ed5283c8089a7925bf165c0b88e1816d8dfdf785cafb3f523a2b0974739",
       "replace": false
     },
     {
@@ -519,21 +574,21 @@
       "source": "ci/localized-release/tests/test_release_metadata.py",
       "destination": "ci/localized-release/tests/test_release_metadata.py",
       "mode": "100644",
-      "sha256": "72e564fee10a16a5bd47a3f51e71971668faf080fb1a113b01e73b19b78b9061",
+      "sha256": "059ffe5877aac1990df1af0acd21c37471dac915b339b5779fa554aa0ea3b26f",
       "replace": false
     },
     {
       "source": "ci/localized-release/tests/test_release_notes.py",
       "destination": "ci/localized-release/tests/test_release_notes.py",
       "mode": "100644",
-      "sha256": "e291611de9e9a1d83ca9505e9912dd7e1513bef0c807f7f10ce82243255efb8c",
+      "sha256": "53dc416ee4c717c0abad7de48abceeb4d09c12aaa2ebd8359424f570bea1e571",
       "replace": false
     },
     {
       "source": "ci/localized-release/tests/test_resume_release.py",
       "destination": "ci/localized-release/tests/test_resume_release.py",
       "mode": "100644",
-      "sha256": "118d1e874c4d12833b21bcf92fd2f096ce6cd354fb197fc0f744e5e4c0f55991",
+      "sha256": "347102b88970a82a1d1625c2c7b15369a2d5399c2cf2323006b93799b97cb11c",
       "replace": false
     },
     {
@@ -547,7 +602,7 @@
       "source": "ci/localized-release/with-windows-gl.ps1",
       "destination": "ci/localized-release/with-windows-gl.ps1",
       "mode": "100644",
-      "sha256": "dd1edb207aec07d730c323f0092e4af92187bbaf9cad6d3d2d108bc6f72221ec",
+      "sha256": "0257901df3b10b0933bf1881792cbcef8753315df50c7cf3b1b1326e46372ba7",
       "replace": false
     },
     {
@@ -589,7 +644,7 @@
       "source": "ci/upstream-release-watch/watch.py",
       "destination": "ci/upstream-release-watch/watch.py",
       "mode": "100644",
-      "sha256": "7851d2a91c6e91a5ba11419f82a74c3787d8e27dfdb89a0ede4f858edd4d08d5",
+      "sha256": "0b9f8766c9ac5ecfa673920c2ee80088ddaddc7a2b4db21a1e78b5f2894afcf3",
       "replace": false
     },
     {
@@ -645,7 +700,7 @@
       "source": "overlay/src/lib/app/RvCommon/RvUpdateChecker.cpp",
       "destination": "src/lib/app/RvCommon/RvUpdateChecker.cpp",
       "mode": "100644",
-      "sha256": "b4bb2f94a2c200d7a16b31a922dc019e4d7bc16ad848da22650d625dedd78a1a",
+      "sha256": "a9f09875bfa06717081d4444f6a92ad747e630cce3a4efc5759df3bc997e7fee",
       "replace": false
     },
     {
@@ -684,6 +739,34 @@
       "replace": false
     },
     {
+      "source": "tests/localization/pref_dialog_lifetime/CMakeLists.txt",
+      "destination": "tests/localization/pref_dialog_lifetime/CMakeLists.txt",
+      "mode": "100644",
+      "sha256": "7c1756e87bfaa26151666605b0e3856df5b8c02997c3f4c80a6c0ccc3ec45d9a",
+      "replace": false
+    },
+    {
+      "source": "tests/localization/pref_dialog_lifetime/README.md",
+      "destination": "tests/localization/pref_dialog_lifetime/README.md",
+      "mode": "100644",
+      "sha256": "e77efd38c437cd39727b96aa22315cb54f1ae0f9d12807fdb8648864cb09f828",
+      "replace": false
+    },
+    {
+      "source": "tests/localization/pref_dialog_lifetime/extract_methods.py",
+      "destination": "tests/localization/pref_dialog_lifetime/extract_methods.py",
+      "mode": "100644",
+      "sha256": "d85a18d8c9c33f82be88ca0563090cb728d1293d5b7f03b792f7162f9c8d8e01",
+      "replace": false
+    },
+    {
+      "source": "tests/localization/pref_dialog_lifetime/test_pref_dialog_lifetime.cpp",
+      "destination": "tests/localization/pref_dialog_lifetime/test_pref_dialog_lifetime.cpp",
+      "mode": "100644",
+      "sha256": "7b799bfdfc88a983989511a95736bd20c608d65bce6f71d6e4e0e35fc8ebe139",
+      "replace": false
+    },
+    {
       "source": "tests/localization/test_source_sync.py",
       "destination": "tests/localization/test_source_sync.py",
       "mode": "100644",
@@ -701,7 +784,7 @@
       "source": "tests/localization/update_checker/README.md",
       "destination": "tests/localization/update_checker/README.md",
       "mode": "100644",
-      "sha256": "72b3d6174bc33224d5c63d76ffa67798a4211725512326a60d8c0fe96fc80b7b",
+      "sha256": "11cf5235082c0b62ade5541e8da2409e13eb9230c43468b437eb5fdd87042e43",
       "replace": false
     },
     {
@@ -715,7 +798,7 @@
       "source": "tests/localization/update_checker/test_update_checker.cpp",
       "destination": "tests/localization/update_checker/test_update_checker.cpp",
       "mode": "100644",
-      "sha256": "d7aaae71f894d2187501ae41c7f5ff17e488972166e1d6e75cd5b95c67d5ba66",
+      "sha256": "17adf1826eb91dad6e9a93108080f241cdf6fbe857b465daa3e643f221f06287",
       "replace": false
     },
     {
@@ -771,7 +854,7 @@
       "source": "tools/refresh_patch_manifest.py",
       "destination": "tools/refresh_patch_manifest.py",
       "mode": "100644",
-      "sha256": "8bed8ce1d33d429c3263e7a266f92e2c5fbb61f23f24b2cd31015851083f1c34",
+      "sha256": "7f188391f5e454c4d12267a7c9c54381f795d1abde059e9c8d660317c9cb6deb",
       "replace": false
     }
   ]

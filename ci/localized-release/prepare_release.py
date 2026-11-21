@@ -9,6 +9,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 
 from official_release import release_identity
 
@@ -316,13 +317,27 @@ def trusted_context(repo: pathlib.Path) -> tuple[str, int]:
     return checked_sha(os.environ.get('GITHUB_SHA', '')), number
 
 
-def publish_assets(repo: pathlib.Path, assets: pathlib.Path, plan: dict, api) -> None:
+def publish_assets(repo: pathlib.Path, assets: pathlib.Path, plan: dict, api, *, replace_legacy_v410=False) -> dict:
+    from public_assets import MARKER, project_assets
+    updater = repo / 'src/lib/app/RvCommon/RvUpdateChecker.cpp'
+    if updater.is_symlink() or not updater.is_file() or MARKER not in updater.read_text(encoding='utf-8'):
+        raise ValueError('This historical product cannot read clean public names; retain its existing release and build the next compatible version')
+    with tempfile.TemporaryDirectory(prefix='openrv-public-assets-', dir=assets.parent) as staging:
+        public = pathlib.Path(staging) / 'files'
+        projection = project_assets(assets, public, plan['official']['tag'], plan['build_number'])
+        return _publish_public_assets(public, plan, api, projection, replace_legacy_v410=replace_legacy_v410)
+
+
+def _publish_public_assets(assets: pathlib.Path, plan: dict, api, projection, *, replace_legacy_v410=False) -> dict:
     """Publish only after the complete cohort is uploaded and independently verified."""
     from official_workspace import TARGET, build_number, checked_tag, release_from_plan, official_release
     from publication_tags import verify_publication_tag
-    from release_common import sha256
+    from public_assets import parse_publication, legacy_inventory, verify_legacy_asset, verify_legacy_release
     release = release_from_plan(plan)
     number = build_number(plan['build_number'])
+    if type(replace_legacy_v410) is not bool:
+        raise ValueError('Legacy replacement permission must be an explicit boolean')
+    legacy = legacy_inventory(release.tag, number) if replace_legacy_v410 else None
 
     def verify_source():
         if official_release(api, release.tag) != release:
@@ -378,7 +393,8 @@ def publish_assets(repo: pathlib.Path, assets: pathlib.Path, plan: dict, api) ->
                 raise ValueError('Cannot inspect existing release assets')
             for record in batch:
                 name = record.get('name') if isinstance(record, dict) else None
-                if not isinstance(name, str) or name in result:
+                if (not isinstance(name, str) or name in result or type(record.get('id')) is not int
+                        or record['id'] <= 0 or any(value['id'] == record['id'] for value in result.values())):
                     raise ValueError('Existing release has invalid or duplicate asset names')
                 result[name] = record
             if len(batch) < 100:
@@ -386,26 +402,13 @@ def publish_assets(repo: pathlib.Path, assets: pathlib.Path, plan: dict, api) ->
         raise ValueError('Existing release asset pagination exceeded its safety bound')
 
     verify_source()
-    names = sorted(path.name for path in assets.glob('OpenRV-*'))
-    if not names or any((assets / name).is_symlink() or not (assets / name).is_file() for name in names):
-        raise ValueError('Release assets must be immediate regular files')
-    base = f'OpenRV-{release.tag[1:]}-build.{number}'
-    required = {base + '-source.provenance.json', base + '-generated-localization.patch.zip', base + '-source.sha256.txt'}
-    for platform, suffixes in (
-            ('Windows-x64', ('-Setup.exe', '-Portable.zip', '.build.json', '.sha256.txt')),
-            ('macOS-x86_64', ('.dmg', '.zip', '.build.json', '.sha256.txt')),
-            ('macOS-arm64', ('.dmg', '.zip', '.build.json', '.sha256.txt'))):
-        required.update(base + '-' + platform + suffix for suffix in suffixes)
-    if set(names) != required:
-        raise ValueError('Publication requires the exact fifteen assets of the verified build')
-    notes = assets / 'RELEASE-NOTES.md'
-    if notes.is_symlink() or not notes.is_file():
-        raise ValueError('Verified release notes must be an immediate regular file')
+    expected = projection['expected']
+    names = sorted(expected)
+    notes = projection['notes']
     notes_text = notes.read_text(encoding='utf-8')
     title = 'OpenRV ' + release.tag + ' 中英文版'
-    expected = {name: ((assets / name).stat().st_size, 'sha256:' + sha256(assets / name)) for name in names}
 
-    def verify_asset(name, record, release_record):
+    def verify_asset(name, record, release_record, wanted, *, exact_size=True):
         allowed_urls = {f'https://github.com/{TARGET}/releases/download/{release.tag}/{name}'}
         if release_record['draft']:
             # A draft's temporary download tag is bound to its validated HTML
@@ -413,47 +416,118 @@ def publish_assets(repo: pathlib.Path, assets: pathlib.Path, plan: dict, api) ->
             pending_tag = release_record['html_url'].rsplit('/', 1)[1]
             allowed_urls.add(f'https://github.com/{TARGET}/releases/download/{pending_tag}/{name}')
         if (not isinstance(record, dict) or record.get('state') != 'uploaded'
-                or type(record.get('size')) is not int or record['size'] != expected[name][0]
-                or record.get('digest') != expected[name][1]
+                or type(record.get('id')) is not int or record['id'] <= 0
+                or type(record.get('size')) is not int or not 0 < record['size'] <= 64 * 1024**3
+                or (exact_size and record['size'] != wanted['size'])
+                or record.get('digest') != wanted['digest']
                 or record.get('browser_download_url') not in allowed_urls):
-            raise ValueError('Asset lacks exact verified content; it will not be overwritten or published: ' + name)
+            raise ValueError('Asset lacks authenticated cohort content; refusing publication or replacement: ' + name)
+
+    def verify_cohort(records, release_record, desired, *, exact_size=True):
+        if set(records) != set(names):
+            raise ValueError('A public release must contain exactly the twelve authenticated assets')
+        for name in names:
+            verify_asset(name, records[name], release_record, desired[name], exact_size=exact_size)
+
+    def outcome(status, published_number, release_id):
+        return {'status': status, 'requestedBuildNumber': number, 'publishedBuildNumber': published_number,
+                'releaseTag': release.tag, 'releaseId': release_id, 'assetCount': 12}
 
     existing = discover_release()
     command = ['gh', 'release']
     if existing is None:
+        if legacy is not None:
+            raise ValueError('Explicit legacy replacement requires the reviewed existing release')
         subprocess.run(command + ['create', release.tag, '--repo', TARGET, '--verify-tag', '--draft',
-                                  '--latest=false', '--title', title, '--notes-file', str(notes)], check=True, timeout=1800)
+                                  '--latest=false', '--title', title, '--notes-file', str(projection['pending_notes'])],
+                       check=True, timeout=1800)
         existing = discover_release()
         if existing is None or existing['draft'] is not True:
             raise ValueError('A new release must remain a draft until asset verification finishes')
     release_id = existing['id']
+    if legacy is not None:
+        verify_legacy_release(existing)
     existing_assets = read_assets(release_id)
+    marker = parse_publication(existing.get('body'), release.tag)
+    migration = legacy is not None and marker is None
+    legacy_assets = {}
+    if migration:
+        verify_legacy_release(existing)
+        if not set(existing_assets).issubset(set(legacy) | set(names)):
+            raise ValueError('Legacy migration contains unrecognized assets')
+        legacy_assets = {name: record for name, record in existing_assets.items() if name in legacy}
+        for name, record in legacy_assets.items():
+            verify_legacy_asset(name, record, legacy[name])
+        existing_assets = {name: record for name, record in existing_assets.items() if name in expected}
+        if set(legacy_assets) != set(legacy) and set(existing_assets) != set(names):
+            raise ValueError('An incomplete legacy cohort can only resume with all twelve files from the original new build')
+    elif not set(existing_assets).issubset(names):
+        raise ValueError('Historical releases retain their original assets; use the next official version')
+    if not migration and marker is None and existing_assets and (
+            not existing['draft'] or existing.get('body') != projection['pending_notes'].read_text(encoding='utf-8')):
+        raise ValueError('A nonempty unmarked historical release must remain unchanged')
+    previous_number = build_number(marker['buildNumber']) if marker else None
+    previous = {name: {'digest': value} for name, value in marker['assets'].items()} if marker else {}
+    if previous_number is not None and previous_number > number:
+        if existing['draft'] is not False or existing['prerelease'] is not False:
+            raise ValueError('A newer build is present but is not a published stable release')
+        verify_cohort(existing_assets, existing, previous, exact_size=False)
+        return outcome('skipped_newer', previous_number, release_id)
+    if previous_number == number and marker != projection['marker']:
+        raise ValueError('The same build number cannot publish different content')
+
+    replacements = {}
     verified = set()
-    for name in set(names).intersection(existing_assets):
-        verify_asset(name, existing_assets[name], existing)
-        verified.add(name)
-    # Manifests are uploaded last so readers only discover a verified completed set.
+    # Authenticate the whole observed set before any asset mutation. A partial
+    # higher-build resume may contain old hashes and already verified new hashes.
+    for name, record in existing_assets.items():
+        if record.get('digest') == expected[name]['digest']:
+            verify_asset(name, record, existing, expected[name])
+            verified.add(name)
+        elif previous_number is not None and previous_number < number:
+            verify_asset(name, record, existing, previous[name], exact_size=False)
+            replacements[name] = record
+        else:
+            raise ValueError('Existing content is not an authenticated older cohort: ' + name)
+    def delete_exact_asset(name, old):
+        current_release = read_release(release_id)
+        if current_release.get('body') != existing.get('body'):
+            raise ValueError('Publication metadata changed during asset replacement')
+        remote = read_assets(release_id)
+        if migration:
+            verify_cohort({key: value for key, value in remote.items() if key in expected}, current_release, expected)
+        current = remote.get(name)
+        if any(current is None or current.get(key) != old.get(key) for key in ('id', 'name', 'size', 'digest', 'state', 'browser_download_url')):
+            raise ValueError('The exact older asset changed before replacement')
+        # Delete only this authenticated older ID. No --clobber, broad deletes,
+        # changes to an unrecognized release asset, or names-based deletion.
+        subprocess.run(['gh', 'api', '--hostname', 'github.com', '--method', 'DELETE',
+                        f'repos/{TARGET}/releases/assets/{old["id"]}'], check=True, capture_output=True,
+                       text=True, timeout=120)
+    for name, old in replacements.items():
+        delete_exact_asset(name, old)
     missing = [name for name in names if name not in verified]
-    batches = [[name for name in missing if not name.endswith('.build.json')],
-               [name for name in missing if name.endswith('.build.json')]]
-    for batch in batches:
-        if not batch:
-            continue
+    if missing:
         subprocess.run(command + ['upload', release.tag, '--repo', TARGET]
-                       + [str(assets / name) for name in batch], check=True, timeout=1800)
+                       + [str(assets / name) for name in missing], check=True, timeout=1800)
 
     current = read_release(release_id)
+    if current.get('body') != existing.get('body'):
+        raise ValueError('Publication metadata changed before final cohort verification')
     uploaded = read_assets(release_id)
-    for name in names:
-        verify_asset(name, uploaded.get(name), current)
-    higher_manifest = re.compile(re.escape('OpenRV-' + release.tag[1:])
-                                 + r'-build\.([1-9][0-9]*)-(?:Windows-x64|macOS-(?:arm64|x86_64))\.build\.json')
-    if any(record.get('state') == 'uploaded' and (match := higher_manifest.fullmatch(name))
-           and build_number(match.group(1)) > number for name, record in uploaded.items()):
-        verify_source()
-        if current['draft'] is False and current['prerelease'] is False:
-            return  # Retain the stable release's newer download links and Latest state.
-        raise ValueError('A newer build exists in this draft; publish its verified cohort instead')
+    if migration:
+        # All new packages and checksums must be readable and authenticated
+        # while every remaining legacy file is still present. Only then retire
+        # the precise reviewed IDs. A retry binds new hashes to this same build.
+        if set(uploaded) != set(names) | set(legacy_assets):
+            raise ValueError('Legacy migration asset inventory changed during upload')
+        for name, old in legacy_assets.items():
+            verify_legacy_asset(name, uploaded[name], legacy[name])
+        verify_cohort({name: uploaded[name] for name in names}, current, expected)
+        for name, old in legacy_assets.items():
+            delete_exact_asset(name, old)
+        uploaded = read_assets(release_id)
+    verify_cohort(uploaded, current, expected)
 
     status, latest = api.request('GET', TARGET, 'releases/latest')
     if status == 404:
@@ -471,7 +545,9 @@ def publish_assets(repo: pathlib.Path, assets: pathlib.Path, plan: dict, api) ->
     verify_source()
     if (current['draft'] is False and current['prerelease'] is False and current.get('name') == title
             and current.get('body') == notes_text and (not make_latest or (latest or {}).get('id') == release_id)):
-        return  # An exact completed resume needs no uploads or release edits.
+        return outcome('published', number, release_id)
+    # The body marker is the commit point: a new updater rejects every partial
+    # replacement until all twelve assets match this final digest inventory.
     subprocess.run(command + ['edit', release.tag, '--repo', TARGET, '--tag', release.tag, '--verify-tag', '--draft=false',
                               '--prerelease=false', '--latest=' + str(make_latest).lower(),
                               '--title', title, '--notes-file', str(notes)], check=True, timeout=1800)
@@ -480,8 +556,8 @@ def publish_assets(repo: pathlib.Path, assets: pathlib.Path, plan: dict, api) ->
             or published.get('name') != title or published.get('body') != notes_text):
         raise ValueError('Release publication state or notes could not be verified')
     published_assets = read_assets(release_id)
-    for name in names:
-        verify_asset(name, published_assets.get(name), published)
+    verify_cohort(published_assets, published, expected)
+    return outcome('published', number, release_id)
 
 
 def main() -> None:
@@ -500,6 +576,8 @@ def main() -> None:
     parser.add_argument('--assets', type=pathlib.Path)
     args = parser.parse_args(); repo = args.repo.resolve()
     snapshot, number = trusted_context(repo)
+    from public_assets import legacy_migration_enabled
+    replace_legacy_v410 = legacy_migration_enabled()
     if args.phase != 'preflight' and 'ORV_BUILD_NUMBER' not in os.environ:
         raise ValueError('The preflight product build number is required in ORV_BUILD_NUMBER')
     if args.phase == 'preflight':
@@ -509,6 +587,8 @@ def main() -> None:
             raise ValueError('Fresh external preflight workspace is required')
         api = OfficialApi()
         release = official_release(api, args.official_tag)
+        from public_assets import guard_published_release
+        guard_published_release(api, release.tag, number=number, replace_legacy_v410=replace_legacy_v410)
         anchor = resolve_publication_commit(repo, snapshot, api, release)
         plan, plan_hash = prepare_workspace(repo, args.workspace, args.output, release, number,
                                             publication_commit=anchor)
@@ -547,7 +627,8 @@ def main() -> None:
                 raise ValueError('Verified release assets are required')
             from assemble_release import assemble
             assemble(repo, args.assets.resolve(), plan['official']['tag'])
-            publish_assets(repo, args.assets.resolve(), plan, OfficialApi())
+            print(json.dumps(publish_assets(repo, args.assets.resolve(), plan, OfficialApi(),
+                                           replace_legacy_v410=replace_legacy_v410)))
 
 
 if __name__ == '__main__':

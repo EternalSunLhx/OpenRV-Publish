@@ -3,6 +3,7 @@
 #include <RvLocalizedBuild.h>
 #include <QtTest/QtTest>
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -56,6 +57,45 @@ static QJsonObject officialReleaseObject(const QString& tag = QStringLiteral("v4
     auto object = releaseObject(tag);
     object["assets"] = QJsonArray{};
     appendOfficialBuild(object, build);
+    return object;
+}
+
+static void setPublicationMarker(QJsonObject& object, const QJsonObject& marker)
+{
+    object["body"] = QStringLiteral("Downloads and installation instructions.\n\n<!-- openrv-publication: ")
+        + QString::fromUtf8(QJsonDocument(marker).toJson(QJsonDocument::Compact)) + QStringLiteral(" -->\n");
+}
+
+static QJsonObject publicationMarkerObject(const QJsonObject& object)
+{
+    const QString body = object["body"].toString();
+    const QString prefix = QStringLiteral("<!-- openrv-publication: ");
+    const int start = body.indexOf(prefix) + prefix.size();
+    return QJsonDocument::fromJson(body.mid(start, body.indexOf(QStringLiteral(" -->"), start) - start).toUtf8()).object();
+}
+
+static QJsonObject cleanReleaseObject(const QString& tag = QStringLiteral("v4.0.2"), quint64 build = 35)
+{
+    auto object = releaseObject(tag);
+    const QString prefix = QStringLiteral("OpenRV-") + tag.mid(1);
+    const QString url = QStringLiteral("https://github.com/EternalSunLhx/OpenRV-Publish/releases/download/") + tag + '/';
+    QJsonArray assets;
+    QJsonObject hashes;
+    for (const QString& suffix : {QStringLiteral("-Windows-x64-Setup.exe"), QStringLiteral("-Windows-x64-Portable.zip"),
+                                  QStringLiteral("-Windows-x64.sha256.txt"), QStringLiteral("-macOS-arm64.dmg"),
+                                  QStringLiteral("-macOS-arm64.zip"), QStringLiteral("-macOS-arm64.sha256.txt"),
+                                  QStringLiteral("-macOS-x86_64.dmg"), QStringLiteral("-macOS-x86_64.zip"),
+                                  QStringLiteral("-macOS-x86_64.sha256.txt"), QStringLiteral("-source.provenance.json"),
+                                  QStringLiteral("-generated-localization.patch.zip"), QStringLiteral("-source.sha256.txt")})
+    {
+        const QString name = prefix + suffix;
+        const QString hash = QStringLiteral("sha256:") + QString::fromLatin1(QCryptographicHash::hash(name.toUtf8(), QCryptographicHash::Sha256).toHex());
+        hashes[name] = hash;
+        assets.append(QJsonObject{{"name", name}, {"state", "uploaded"}, {"size", 12345},
+                                  {"digest", hash}, {"browser_download_url", url + name}});
+    }
+    object["assets"] = assets;
+    setPublicationMarker(object, {{"schema", 1}, {"tag", tag}, {"buildNumber", QString::number(build)}, {"assets", hashes}});
     return object;
 }
 
@@ -203,6 +243,129 @@ private slots:
         QCOMPARE(compareRelease(oldDevelopment, officialVersion("v4.0.2", 999)), Offer::Older);
         QCOMPARE(compareRelease(oldDevelopment, officialVersion("v4.1.0", 1)), Offer::PublishedForDevelopment);
         QCOMPARE(officialVersion("v4.0.2", 17).displayVersion(), QStringLiteral("4.0.2+build.17"));
+    }
+
+    void cleanPublicationAssetsKeepInternalBuildAndAllPlatforms()
+    {
+        const auto object = cleanReleaseObject();
+        for (const auto& target : {qMakePair(QString("Windows"), QString("x64")),
+                                    qMakePair(QString("macOS"), QString("arm64")),
+                                    qMakePair(QString("macOS"), QString("x86_64"))})
+        {
+            const auto parsed = parseRelease(bytes(object), target.first, target.second);
+            QVERIFY(parsed.isValid());
+            QCOMPARE(parsed.release.version.buildNumber, quint64(35));
+            QVERIFY(!parsed.release.downloadUrl.isEmpty());
+            QVERIFY(!parsed.release.downloadUrl.fileName().contains("-build."));
+            const LocalVersion local{QVersionNumber(4, 0, 2), 0, false, QStringLiteral("4.0.2+build.34"), 34, true};
+            QCOMPARE(compareRelease(local, parsed.release.version), Offer::Newer);
+        }
+        QVERIFY(parseRelease(bytes(object), "Windows", "arm64").release.downloadUrl.isEmpty());
+        const auto maximum = parseRelease(bytes(cleanReleaseObject("v4.0.2", 18446744073709551615ULL)), "Windows", "x64");
+        QVERIFY(maximum.isValid());
+        QCOMPARE(maximum.release.version.buildNumber, 18446744073709551615ULL);
+    }
+
+    void cleanPublicationRequiresOneStrictMarkerWithoutFallback()
+    {
+        const auto correct = cleanReleaseObject();
+        const QString body = correct["body"].toString();
+        QStringList malformed{body + body, QStringLiteral("<!-- openrv-publication: bad json -->"),
+                              QString(body).replace("openrv-publication: ", "openrv-publication:"),
+                              QString(body).replace("openrv-publication", "OPENRV-PUBLICATION"),
+                              QString(body).replace("\"buildNumber\":\"35\"", "\"buildNumber\":\"35\",\"buildNumber\":\"36\""),
+                              QString(body).replace("\"buildNumber\":\"35\"", "\"buildNumber\":\"35\",\"build\\u004eumber\":\"36\"")};
+        const QString name = correct["assets"].toArray()[0].toObject()["name"].toString();
+        const QString hash = correct["assets"].toArray()[0].toObject()["digest"].toString();
+        const QString member = '"' + name + QStringLiteral("\":\"") + hash + '"';
+        malformed.append(QString(body).replace(member, member + ',' + member));
+        malformed.append(QStringLiteral("<!-- openrv-publication: \n")
+                         + QString::fromUtf8(QJsonDocument(publicationMarkerObject(correct)).toJson()) + QStringLiteral(" -->\n"));
+        for (const QString& bad : malformed)
+        {
+            auto object = correct;
+            object["body"] = bad;
+            QCOMPARE(parseRelease(bytes(object), "Windows", "x64").error, ParseError::InvalidAsset);
+            appendOfficialBuild(object, 99); // Invalid marker must never select the legacy fallback.
+            QCOMPARE(parseRelease(bytes(object), "Windows", "x64").error, ParseError::InvalidAsset);
+        }
+        auto absent = correct;
+        absent.remove("body");
+        const auto noMarker = parseRelease(bytes(absent), "Windows", "x64");
+        QVERIFY(noMarker.isValid());
+        QVERIFY(noMarker.release.downloadUrl.isEmpty());
+        QCOMPARE(noMarker.release.version.buildNumber, quint64(0));
+    }
+
+    void cleanPublicationRejectsInvalidSchemaTagCountersAndHashInventory()
+    {
+        for (const QJsonValue& counter : {QJsonValue(35), QJsonValue(true), QJsonValue("0"), QJsonValue("035"),
+                                          QJsonValue("-1"), QJsonValue("18446744073709551616")})
+        {
+            auto object = cleanReleaseObject();
+            auto marker = publicationMarkerObject(object);
+            marker["buildNumber"] = counter;
+            setPublicationMarker(object, marker);
+            QCOMPARE(parseRelease(bytes(object), "Windows", "x64").error, ParseError::InvalidAsset);
+        }
+        for (const QString& change : {QStringLiteral("schema"), QStringLiteral("tag"), QStringLiteral("extra"),
+                                      QStringLiteral("missing-hash"), QStringLiteral("bad-hash"), QStringLiteral("extra-hash")})
+        {
+            auto object = cleanReleaseObject();
+            auto marker = publicationMarkerObject(object);
+            if (change == "schema") marker["schema"] = true;
+            if (change == "tag") marker["tag"] = "v4.0.3";
+            if (change == "extra") marker["extra"] = 1;
+            auto hashes = marker["assets"].toObject();
+            if (change == "missing-hash") hashes.remove(hashes.keys().first());
+            if (change == "bad-hash") hashes[hashes.keys().first()] = QStringLiteral("sha256:") + QString(64, 'G');
+            if (change == "extra-hash") hashes["OpenRV-4.0.2-Windows-x64.build.json"] = QStringLiteral("sha256:") + QString(64, '0');
+            marker["assets"] = hashes;
+            setPublicationMarker(object, marker);
+            QCOMPARE(parseRelease(bytes(object), "Windows", "x64").error, ParseError::InvalidAsset);
+        }
+    }
+
+    void cleanPublicationRejectsIncompleteDuplicateMixedOrUnboundAssets()
+    {
+        for (const QString& change : {QStringLiteral("missing"), QStringLiteral("duplicate"), QStringLiteral("legacy-mix"),
+                                      QStringLiteral("digest"), QStringLiteral("digest-missing"), QStringLiteral("url"),
+                                      QStringLiteral("state"), QStringLiteral("size")})
+        {
+            auto object = cleanReleaseObject();
+            auto assets = object["assets"].toArray();
+            auto asset = assets[0].toObject();
+            if (change == "missing") assets.removeLast();
+            if (change == "duplicate") assets[1] = asset;
+            if (change == "digest") asset["digest"] = QStringLiteral("sha256:") + QString(64, '0');
+            if (change == "digest-missing") asset.remove("digest");
+            if (change == "url") asset["browser_download_url"] = "https://foreign.invalid/file";
+            if (change == "state") asset["state"] = "new";
+            if (change == "size") asset["size"] = 0;
+            assets[0] = asset;
+            object["assets"] = assets;
+            if (change == "legacy-mix") appendOfficialBuild(object, 36);
+            QCOMPARE(parseRelease(bytes(object), "Windows", "x64").error, ParseError::InvalidAsset);
+        }
+    }
+
+    void cleanPublicationUpgradeDialogUsesTheCleanInstallerUrl()
+    {
+        const auto local = currentBuild();
+        const quint64 build = local.officialTag ? local.buildNumber + 1 : 35;
+        FakeManager manager;
+        manager.payload = bytes(cleanReleaseObject('v' + local.base.toString(), build));
+        Rv::RvUpdateChecker checker(nullptr, &manager);
+        checker.showDialog();
+        QTRY_VERIFY(updateDialog()->property("rvUpdateResult") != QStringLiteral("checking"));
+        QCOMPARE(updateDialog()->property("rvLatestBuildNumber").toULongLong(), build);
+        if (compiledPlatform() != "unsupported")
+        {
+            const QString expected = local.development ? "development-alternative" : "newer";
+            QCOMPARE(updateDialog()->property("rvUpdateResult").toString(), expected);
+            QVERIFY(!updateDialog()->property("rvDownloadUrl").toUrl().fileName().contains("-build."));
+            QVERIFY(!updateDialog()->property("rvDownloadUrl").toUrl().isEmpty());
+        }
     }
 
     void officialPlatformAssets()

@@ -35,8 +35,8 @@ class ReleaseNotesTests(unittest.TestCase):
         names = {name for record in records for name in record['files']}
         names.update(f"OpenRV-{source['releaseVersion']}-{record['platform']}-{record['architecture']}.sha256.txt"
                      for record in records)
-        self.assertEqual(len(links), 9)
-        self.assertEqual(set(links), {prefix + name for name in names})
+        self.assertEqual(len(links), 10)
+        self.assertEqual(set(links), {prefix + name for name in names} | {'https://support.apple.com/zh-cn/102445'})
         self.assertLess(notes.index('| Windows x64'), notes.index('| macOS Intel'))
         self.assertLess(notes.index('| macOS Intel'), notes.index('| macOS Apple Silicon'))
 
@@ -52,7 +52,8 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertRegex(notes, r'\| macOS Intel \|[^\n]+\| macOS 13\.7 及以上 \|')
         self.assertRegex(notes, r'\| macOS Apple Silicon \|[^\n]+\| macOS 15\.3 及以上 \|')
         for instruction in ('所有用户', '管理员权限', '打开方式', '不会更改现有默认播放器',
-                            'Language / 语言', 'English', '重启软件', 'ad-hoc', '未经过 Apple 公证'):
+                            'Language / 语言', 'English', '重启软件', 'ad-hoc', '未经过 Apple 公证',
+                            'OpenRV.app', '隐私与安全性', '仍要打开'):
             self.assertIn(instruction, notes)
 
     def test_missing_requirements_and_different_signatures_are_not_misrepresented(self):

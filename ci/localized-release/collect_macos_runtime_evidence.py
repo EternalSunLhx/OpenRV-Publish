@@ -163,7 +163,7 @@ def collect(repo: Path, arch: str, diagnostic_dir: Path) -> Path:
             save(relative, payload, size > limit)
 
     windows = owned_crash_windows(repo, work, arch)
-    executable = repo / '_install_release/RV.app/Contents/MacOS/rv'
+    executable = repo / '_install_release/OpenRV.app/Contents/MacOS/rv'
     if not safe_file(repo, executable):
         executable = executable.with_name('RV')
     if windows and safe_file(repo, executable):

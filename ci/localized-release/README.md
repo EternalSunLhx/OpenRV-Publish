@@ -16,6 +16,8 @@ Builds select CY2025, Qt 6.5.3, CMake 3.31.6, Python 3.11 and Rust 1.100.0. Depe
 
 The source base is fetched from ASWF only when needed to reconstruct a patch. It is not a parent of this repository's main history. Owned resources include `localization/i18n_zh.ts`, the native files under `overlay/src/`, and selected CI/tools/tests. Unexpected collisions with upstream source are rejected; replacement mappings are explicit. Upstream version numbers and submodule pointers are preserved.
 
+The separate `openrv-preferences-lifetime.patch` protects the document-owned preferences cache with `QPointer` and prevents shutdown from lazily creating auxiliary windows. Its versioned condition checks the complete three-file patch against the composed source: a complete reverse-apply check means the reviewed fix is already present and is skipped; otherwise the complete forward application must succeed. Partial fixes, conflicting changes and unfamiliar alternative fixes stop for source review. This does not infer a fix from an issue's closed state, a version number or a keyword. The source plan records and each platform rechecks the decision and input/output trees. Other patches retain their normal conflict checks. Once an upstream solution is reviewed, this patch and its condition can be retired together.
+
 Preflight produces a schema-4 `official-tag-patch-workspace` plan with the exact official Release ID, original object/commit/tree, maintained snapshot, publication anchor, patch/resource input digest, generated localization delta and final source tree. Each platform must reconstruct and verify that same tree. The ordinary HEAD stays at the official source commit inside the temporary build checkout. Official refs live under `refs/openrv-upstream/tags/`.
 
 ## Publication tags and credentials
@@ -26,13 +28,15 @@ Tag creation and publication use job-scoped `GITHUB_TOKEN` with Contents write p
 
 ## Running and publishing
 
-Open **官方版本中英文打包与发布 (Auto) (Manual)** in Actions, select `main`, and enter an explicit official stable `official_tag`, for example `v4.1.0`. This input is required and cannot be empty. The hourly monitor selects the latest official stable release and supplies its exact tag automatically. It runs at minute23 and deduplicates only builds from this lightweight main history; the cancelled earlier full-source migration run does not suppress the first lightweight build.
+Open **官方版本中英文打包与发布 (Auto) (Manual)** in Actions, select `main`, and enter an explicit official stable `official_tag`. This input is required and cannot be empty. Same-tag rebuilds are supported. The hourly monitor selects the latest official stable release and supplies its exact tag automatically. It runs at minute23 and deduplicates builds from this lightweight main history.
+
+The optional `replace_legacy_v410` input defaults to false. It permits only the reviewed v4.1.0 build35 migration, with its exact Release ID and fifteen asset IDs, names, sizes and hashes pinned in `legacy-v4.1.0-build35-assets.json`. The new product must include the compatible updater. All three native builds and all twelve uploaded public files must pass validation before the old files are removed. Preflight requires the intact legacy cohort; an interrupted migration must resume publication from the same original build artifacts with the same explicit input, rather than starting another native build. Other historical-format releases remain protected.
 
 All packages use Release configuration. The product number remains `28 + GITHUB_RUN_NUMBER` to preserve update ordering after the old repository's build28. Workflow run titles keep the raw Actions number. A retry of the same run keeps its product number.
 
-Platform assets are retained as Actions artifacts for14 days. Every formal build requires the actual native GUI, saved-language, decode, installation or bundle checks. The assembler validates all three platforms and file hashes before uploading the fifteen expected files. A new release starts as a draft; only a complete remote size/digest/state/URL check and a final source/publication-tag check permit automatic stable publication. Interrupted uploads are resumed only when existing files match exactly; files are never overwritten.
+Platform assets are retained as Actions artifacts for14 days. Every formal build requires the actual native GUI, saved-language, decode, installation or bundle checks. The original assembler validates all fifteen internal files. Publication then creates twelve public files: clean version/platform names, packages and checksums, plus source provenance/patch/checksums. The three build manifests remain in Actions artifacts. Package bytes and internal build identity do not change during projection. A new release stays a draft until remote size/digest/state/URL and source checks pass. A hidden structured release-note marker binds the internal build number to all twelve public hashes; compatible updater source is required before publishing this format.
 
-Publisher jobs are serialized across tags. A manual older version cannot replace the newer Latest release, and an older same-version build cannot replace newer download notes. Release notes show platform downloads, actual macOS minimums and installation instructions. Detailed build/source provenance remains in machine-readable assets.
+Publisher jobs are serialized across tags. A manual older version cannot replace the newer Latest release, and an older same-version build cannot replace a newer complete cohort. Same-build resumes require matching bytes. A verified higher build may replace a previous clean-format cohort; the marker updates only after all new files are verified, so the new updater rejects mixed in-flight files. Historical-format releases require the narrowly scoped migration described above. Release notes show platform downloads, actual macOS minimums and installation instructions; detailed native build proofs stay in Actions artifacts. Already-installed legacy updaters require one manual download to upgrade to the new public format.
 
 The generated localization patch is stored in a deterministic ZIP, including an empty delta, so no zero-byte release asset is necessary. The accompanying source checksum file covers both the ZIP and the full source plan.
 
@@ -58,9 +62,19 @@ The Qt runtime profile installs `qtquick3d` for the SpatialAudio framework shipp
 
 Mac packaging bundles the non-system dependency closure with pinned Delocate0.13.0, preserves framework helpers/resources and license files, rejects architecture/path collisions, and checks every final Mach-O dependency. The highest minimum macOS version among packaged binaries is recorded and applied to Info.plist as required; the build target alone is not advertised as the minimum runtime OS.
 
-Final Mac code is signed inside-out with an ad-hoc signature and verified; `ditto` preserves bundle metadata and symlinks, and `hdiutil` creates/verifies the DMG. These builds are not Apple-notarized. Windows installers are not publisher-signed. The runtime includes OpenRV/dependency license notices.
+The distributed Mac application is named `OpenRV.app`, with `OpenRV` as its bundle and display name; its internal executable and bundle identifier remain compatible. Final Mac code is signed inside-out with an ad-hoc signature and verified; `ditto` preserves bundle metadata and symlinks, and `hdiutil` creates/verifies the DMG. These builds are not Apple-notarized. Renaming or rebuilding alone does not remove Gatekeeper verification warnings. Windows installers are not publisher-signed. The runtime includes OpenRV/dependency license notices.
 
 ## Maintenance checks
+
+### Optional post-package functional tests
+
+The separate **已发布安装包功能测试 (Manual)** workflow downloads an existing stable release's portable Windows ZIP or macOS app ZIP and verifies its identity and SHA-256 before running it on disposable hosted runners. Select a tag, platform, language and case. `rotation-playback` opens the synthetic MP4, invokes the actual 180-degree rotation menu, observes changing playback frames, and closes normally. `preferences-owner-close` opens preferences owned by session A, creates B, closes A, verifies child destruction, then closes B. A crash, timeout or missing evidence fails the case.
+
+This workflow is manually dispatched only. It never compiles, publishes or changes the packaging workflow's result. Its artifact contains package identity, case reports and bounded process logs, not the temporary preference directory. The small local Qt ownership regression under `tests/localization/pref_dialog_lifetime/` is also independent; its passing result is not evidence of full OpenRV or macOS execution.
+
+Windows hosted tests reuse the scoped software OpenGL launcher with the reviewed Qt DLL size and hash, restored process settings and a provider outside the extracted runtime. Only that test archive is downloaded; the product is unchanged. This verifies functional behavior in the CI graphics environment, not a user's GPU or playback performance.
+
+### Source and manifest checks
 
 The preflight suite checks every formal macOS RV GUI script for direct successful Qt event-loop exits. The snapshot probe, both language smoke checks and all chooser-persistence launches must close their owned RV session normally. Callback tests cover close rejection and premature destruction; native packaging still requires clean process exits, and publication checks both languages' shutdown evidence. A passing Python assertion or success marker never overrides a native crash or timeout.
 

@@ -1,4 +1,4 @@
-"""Package a native installed RV.app. Ad-hoc signing is not Apple notarization."""
+"""Package the native installed bundle as OpenRV.app. Ad-hoc signing is not Apple notarization."""
 from __future__ import annotations
 
 import argparse
@@ -20,6 +20,25 @@ MACHO_MAGICS = {bytes.fromhex(value) for value in ('feedface', 'cefaedfe', 'feed
                                                   'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca')}
 
 
+def prepare_app_bundle(app: pathlib.Path) -> pathlib.Path:
+    """Rename the installed bundle before all dependency, signing and runtime checks."""
+    if app.is_symlink() or not app.is_dir() or app.name not in ('RV.app', 'OpenRV.app'):
+        raise ValueError('Expected a regular installed RV.app or OpenRV.app directory')
+    resolved = app.resolve()
+    if resolved.parent != app.absolute().parent.resolve() or resolved.name != app.name:
+        raise ValueError('Installed app bundle must not redirect outside its parent directory')
+    app = resolved
+    if not (app / 'Contents' / 'Info.plist').is_file():
+        raise FileNotFoundError(f'Installed app bundle is incomplete: {app}')
+    if app.name == 'OpenRV.app':
+        return app
+    destination = app.with_name('OpenRV.app')
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError('Refusing to overwrite an existing OpenRV.app bundle')
+    app.rename(destination)
+    return destination
+
+
 def update_bundle_metadata(app: pathlib.Path, metadata: dict, minimum_macos: str) -> None:
     """Write release/native identities before the final ad-hoc signature."""
     plist_path = app / 'Contents' / 'Info.plist'
@@ -27,6 +46,8 @@ def update_bundle_metadata(app: pathlib.Path, metadata: dict, minimum_macos: str
         info = plistlib.load(stream)
     info['CFBundleShortVersionString'] = metadata['version']
     info['CFBundleVersion'] = metadata['version']
+    info['CFBundleName'] = 'OpenRV'
+    info['CFBundleDisplayName'] = 'OpenRV'
     info['OpenRVReleaseVersion'] = metadata['releaseVersion']
     info['OpenRVNativeVersion'] = metadata['nativeVersion']
     info['OpenRVPublisher'] = PUBLISHER
@@ -75,13 +96,14 @@ def main() -> None:
     if sys.platform != 'darwin':
         parser.error('macOS packaging requires native Apple command-line tools')
     repo = args.repo.resolve()
-    app = (args.app or repo / '_install_release' / 'RV.app').resolve()
+    app = (args.app or repo / '_install_release' / 'RV.app').absolute()
     output = repo / 'dist' / 'localized-release'
     output.mkdir(parents=True, exist_ok=True)
     work = repo / '_release_work'
     work.mkdir(exist_ok=True)
     if not (app / 'Contents' / 'Info.plist').is_file():
         raise FileNotFoundError(f'Installed app bundle is incomplete: {app}')
+    app = prepare_app_bundle(app)
     metadata = source_metadata(repo)
     base = f"OpenRV-{metadata['releaseVersion']}-macOS-{args.arch}"
     resources = app / 'Contents' / 'Resources'
@@ -162,7 +184,7 @@ def main() -> None:
     subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(app), str(output / zip_name)], check=True)
     with tempfile.TemporaryDirectory(prefix='dmg-', dir=work) as staging:
         staging_path = pathlib.Path(staging)
-        subprocess.run(['ditto', str(app), str(staging_path / 'RV.app')], check=True)
+        subprocess.run(['ditto', str(app), str(staging_path / app.name)], check=True)
         shutil.copy2(publisher_info, staging_path / publisher_info.name)
         (staging_path / 'Applications').symlink_to('/Applications', target_is_directory=True)
         subprocess.run(['hdiutil', 'create', '-volname', 'OpenRV', '-srcfolder', staging,

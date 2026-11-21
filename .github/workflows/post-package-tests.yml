@@ -1,0 +1,127 @@
+name: 已发布安装包功能测试 (Manual)
+run-name: Test OpenRV ${{ inputs.release_tag }} packages (${{ inputs.platform }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '已发布版本，例如 v4.1.0；下载现有包，不编译或发布'
+        required: true
+        default: 'v4.1.0'
+      platform:
+        description: '测试平台'
+        type: choice
+        options: [all, Windows-x64, macOS-x86_64, macOS-arm64]
+        default: all
+      test_case:
+        description: '独立功能用例'
+        type: choice
+        options: [all, rotation-playback, preferences-owner-close]
+        default: all
+      language:
+        description: '界面语言'
+        type: choice
+        options: [both, en, zh_CN]
+        default: both
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    name: Select independent test platforms
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.platforms.outputs.matrix }}
+    steps:
+      - id: platforms
+        env:
+          SELECTED_PLATFORM: ${{ inputs.platform }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          choices = [
+              {'platform': 'Windows-x64', 'os': 'windows-2022'},
+              {'platform': 'macOS-x86_64', 'os': 'macos-15-intel'},
+              {'platform': 'macOS-arm64', 'os': 'macos-15'},
+          ]
+          requested = os.environ['SELECTED_PLATFORM']
+          selected = [item for item in choices if requested in ('all', item['platform'])]
+          if not selected:
+              raise ValueError('Unknown test platform')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps({'include': selected}) + '\n')
+          PY
+
+  test:
+    name: Test ${{ matrix.platform }} published package
+    needs: select
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      PYTHONNOUSERSITE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Check independent package test helpers
+        shell: bash
+        run: |
+          python -B -m unittest discover -s ci/localized-release/tests -p test_download_test_package.py -v
+          python -B -m unittest discover -s ci/localized-release/tests -p test_post_package_smoke.py -v
+      - name: Download and verify the published portable package
+        id: package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_RELEASE_TAG: ${{ inputs.release_tag }}
+          TEST_PLATFORM: ${{ matrix.platform }}
+        run: python -B ci/localized-release/download_test_package.py --tag "$TEST_RELEASE_TAG" --platform "$TEST_PLATFORM" --output "$RUNNER_TEMP/openrv-post-package-download"
+      - name: Install the pinned Windows test-only OpenGL provider archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m pip install 'aqtinstall==3.2.*' 'py7zr==0.22.*'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot install the Qt archive downloader.' }
+          $qtRoot = Join-Path $env:RUNNER_TEMP 'openrv-post-package-qt'
+          python -m aqt install-qt windows desktop 6.5.3 win64_msvc2019_64 --archives opengl32sw --outputdir $qtRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot download the pinned test-only OpenGL archive.' }
+          "QT_ROOT_DIR=$(Join-Path $qtRoot '6.5.3/msvc2019_64')" | Out-File -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run Windows functional cases with an isolated software OpenGL provider
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TEST_RUNTIME: ${{ steps.package.outputs.runtime }}
+          TEST_CASE: ${{ inputs.test_case }}
+          TEST_LANGUAGE: ${{ inputs.language }}
+        run: ./ci/localized-release/with-windows-gl.ps1 -Task PostPackage -RuntimeDir $env:TEST_RUNTIME -WorkDir (Join-Path $env:RUNNER_TEMP 'openrv-post-package-results') -TestCase $env:TEST_CASE -Language $env:TEST_LANGUAGE
+      - name: Run macOS functional cases without rebuilding or publishing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TEST_RUNTIME: ${{ steps.package.outputs.runtime }}
+          TEST_CASE: ${{ inputs.test_case }}
+          TEST_LANGUAGE: ${{ inputs.language }}
+        run: python -B ci/localized-release/post_package_smoke.py --runtime "$TEST_RUNTIME" --work "$RUNNER_TEMP/openrv-post-package-results" --case "$TEST_CASE" --language "$TEST_LANGUAGE"
+      - name: Upload independent test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: post-package-test-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/openrv-post-package-download/package-identity.json
+            ${{ runner.temp }}/openrv-post-package-results/report.json
+            ${{ runner.temp }}/openrv-post-package-results/gl-provider.json
+            ${{ runner.temp }}/openrv-post-package-results/*/gui.json
+            ${{ runner.temp }}/openrv-post-package-results/*/stdout.log
+            ${{ runner.temp }}/openrv-post-package-results/*/stderr.log
+          if-no-files-found: warn
+          retention-days: 14

@@ -13,6 +13,7 @@ import sys
 from official_workspace import (TARGET, OfficialApi, digest, materialize,
                                 read_input, verify_materialized, watcher)
 from prepare_release import product_build_number, publish_assets
+from public_assets import legacy_migration_enabled
 
 WORKFLOW = '.github/workflows/localized-release.yml'
 INPUT = 'official-build-input'
@@ -150,7 +151,7 @@ def stage_packages(directory, assets, evidence):
             shutil.copyfile(path, target)
 
 
-def publish_existing(repo, root, evidence):
+def publish_existing(repo, root, evidence, *, replace_legacy_v410=False):
     if source_evidence(evidence['source_run_id']) != evidence:
         raise ValueError('Original source-run evidence changed during download')
     source = root / 'source'
@@ -174,14 +175,28 @@ def publish_existing(repo, root, evidence):
                    cwd=source, env=environment, check=True, timeout=1200)
     verify_materialized(source, plan, delta, expected_snapshot=evidence['source_sha'],
                         expected_build=evidence['build_number'])
-    publish_assets(source, assets, plan, OfficialApi())
+    publication = publish_assets(source, assets, plan, OfficialApi(), replace_legacy_v410=replace_legacy_v410)
+    if (not isinstance(publication, dict) or publication.get('status') not in ('published', 'skipped_newer')
+            or publication.get('requestedBuildNumber') != evidence['build_number']
+            or publication.get('releaseTag') != plan['official']['tag']
+            or type(publication.get('publishedBuildNumber')) is not int
+            or publication['publishedBuildNumber'] < evidence['build_number']
+            or (publication['status'] == 'published' and publication['publishedBuildNumber'] != evidence['build_number'])
+            or (publication['status'] == 'skipped_newer' and publication['publishedBuildNumber'] <= evidence['build_number'])):
+        raise ValueError('Publication result does not identify the requested or retained newer build')
     receipt = {**evidence, 'controller_sha': os.environ['GITHUB_SHA'],
                'publication_run_id': os.environ['GITHUB_RUN_ID'], 'plan_sha256': plan_hash,
-               'release_tag': plan['official']['tag'], 'native_rebuild': False, 'status': 'published'}
+               'release_tag': plan['official']['tag'], 'native_rebuild': False,
+               'status': publication['status'], 'publication': publication,
+               'replace_legacy_v410': replace_legacy_v410}
     (root / 'publication-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
-        summary.write(f"Published {plan['official']['tag']} using unchanged packages from source run "
-                      f"{evidence['source_run_id']} ({evidence['source_sha']}). No native rebuild.\n")
+        if publication['status'] == 'published':
+            summary.write(f"Published {plan['official']['tag']} using unchanged packages from source run "
+                          f"{evidence['source_run_id']} ({evidence['source_sha']}). No native rebuild.\n")
+        else:
+            summary.write(f"Retained newer published build {publication['publishedBuildNumber']}; "
+                          f"requested build {evidence['build_number']} was not published. No native rebuild.\n")
 
 
 def main():
@@ -191,6 +206,7 @@ def main():
     args = parser.parse_args()
     repo = Path.cwd().resolve()
     controller_context(repo)
+    replace_legacy_v410 = legacy_migration_enabled()
     root = Path(os.environ['RUNNER_TEMP']).resolve() / 'openrv-publication-recovery'
     if args.phase == 'discover':
         evidence = source_evidence(positive(args.source_run))
@@ -203,7 +219,7 @@ def main():
         evidence = json.loads((root / 'source-evidence.json').read_text(encoding='utf-8'))
         if evidence['source_run_id'] != positive(args.source_run):
             raise ValueError('Source run changed between recovery steps')
-        publish_existing(repo, root, evidence)
+        publish_existing(repo, root, evidence, replace_legacy_v410=replace_legacy_v410)
 
 
 if __name__ == '__main__':

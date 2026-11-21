@@ -5,9 +5,14 @@ on:
   workflow_dispatch:
     inputs:
       official_tag:
-        description: '必填：官方稳定版标签，例如 v4.1.0（自动监控会填写最新稳定版）'
+        description: '必填：官方稳定版标签，例如 v4.1.0'
         required: true
         default: ''
+      replace_legacy_v410:
+        description: '仅首次重打 v4.1.0：全部新包验证成功后替换原 build35 附件'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -22,6 +27,7 @@ env:
   PYTHONNOUSERSITE: '1'
   PYTHONDONTWRITEBYTECODE: '1'
   ORV_REQUIRE_GUI_SMOKE: 'true'
+  ORV_REPLACE_LEGACY_V410: ${{ inputs.replace_legacy_v410 && 'true' || 'false' }}
 
 jobs:
   preflight:

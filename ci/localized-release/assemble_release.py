@@ -65,10 +65,12 @@ def release_notes(source: dict, records: list[dict], tag: str) -> str:
 {table}
 
 - Windows 安装版为所有用户安装，需要管理员权限；安装后可在视频文件的“打开方式”中选择 OpenRV，不会更改现有默认播放器。便携版解压后即可使用。
-- macOS 请按处理器类型下载，将 RV.app 拖入“应用程序”。
+- macOS 请按处理器类型下载，将 OpenRV.app 拖入“应用程序”。
 - 在“Language / 语言”菜单选择简体中文或 English，重启软件后生效。
 
 Windows 安装包未使用发布者证书签名。{signing}系统可能显示信任提示。
+
+若 macOS 提示 Apple 无法验证应用，且你确认安装包来自本仓库并未被改动：先尝试打开，再进入“系统设置 → 隐私与安全性 → 仍要打开”确认。参见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)。
 '''
 
 

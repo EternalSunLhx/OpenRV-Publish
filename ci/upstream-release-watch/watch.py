@@ -29,6 +29,13 @@ LOCALIZATION_BASE_FILE = 'ci/upstream-release-watch/localization-base.json'
 OFFICIAL_TAG = re.compile(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)')
 SHA = re.compile(r'[0-9a-f]{40}')
 SHA256 = re.compile(r'[0-9a-f]{64}')
+PREFERENCES_PATCH = 'patches/openrv-preferences-lifetime.patch'
+PREFERENCES_CONDITION = 'preferences-lifetime-v1'
+PREFERENCES_PATHS = frozenset((
+    'src/lib/app/RvCommon/RvApplication.cpp',
+    'src/lib/app/RvCommon/RvCommon/RvApplication.h',
+    'src/lib/app/RvCommon/RvDocument.cpp',
+))
 
 
 def checked_sha(value: str) -> str:
@@ -129,18 +136,28 @@ def bundle_path(value: str) -> str:
 
 
 def validate_bundle_configuration(config: dict) -> None:
+    if set(config) != {'schema', 'repository', 'source_base_sha', 'optional_upstream_components', 'patches', 'owned_files'}:
+        raise ValueError('Unknown or missing lightweight bundle configuration fields')
     patches, owned = config.get('patches'), config.get('owned_files')
     if not isinstance(patches, list) or not 1 <= len(patches) <= 16:
         raise ValueError('A lightweight bundle needs an explicit bounded patch list')
-    patch_paths, optional = set(), set()
+    patch_paths, optional, conditional = set(), set(), False
     for entry in patches:
-        if not isinstance(entry, dict) or set(entry) != {'path', 'sha256', 'optional_component'}:
+        keys = {'path', 'sha256', 'optional_component'}
+        if not isinstance(entry, dict) or set(entry) not in (keys, keys | {'condition'}):
             raise ValueError('Invalid declared patch record')
         path = bundle_path(entry['path'])
         if not path.startswith('patches/') or path in patch_paths or not SHA256.fullmatch(str(entry['sha256'])):
             raise ValueError('Invalid or duplicate declared patch identity')
         patch_paths.add(path)
         component = entry['optional_component']
+        if 'condition' in entry:
+            if (path != PREFERENCES_PATCH or entry['condition'] != PREFERENCES_CONDITION
+                    or component is not None or entry is not patches[-1]):
+                raise ValueError('Conditional patch must be the final reviewed preferences-lifetime patch')
+            conditional = True
+        elif path == PREFERENCES_PATCH:
+            raise ValueError('Preferences-lifetime patch requires its reviewed condition')
         if component is not None:
             if component not in config.get('optional_upstream_components', []):
                 raise ValueError('A patch may omit only an explicitly reviewed optional component')
@@ -158,7 +175,56 @@ def validate_bundle_configuration(config: dict) -> None:
                 or entry['mode'] not in ('100644', '100755') or not SHA256.fullmatch(str(entry['sha256']))
                 or type(entry['replace']) is not bool):
             raise ValueError('Invalid, recursive, or duplicate owned-file identity')
+        if conditional and destination in PREFERENCES_PATHS:
+            raise ValueError('Owned overlays cannot replace conditionally verified preferences source')
         destinations.add(destination)
+
+
+def validate_conditional_patch_decisions(records) -> None:
+    if not isinstance(records, list) or len(records) > 1:
+        raise ValueError('Invalid conditional maintenance patch provenance')
+    for record in records:
+        if (not isinstance(record, dict)
+                or set(record) != {'path', 'sha256', 'condition', 'input_tree', 'output_tree', 'decision', 'reason'}
+                or record['path'] != PREFERENCES_PATCH or record['condition'] != PREFERENCES_CONDITION
+                or not isinstance(record['sha256'], str) or not SHA256.fullmatch(record['sha256'])
+                or (record['decision'], record['reason']) not in (
+                    ('applied', 'forward-apply-check'), ('already-fixed', 'reverse-apply-check'))):
+            raise ValueError('Invalid conditional maintenance patch decision')
+        checked_sha(record['input_tree']); checked_sha(record['output_tree'])
+        if (record['input_tree'] == record['output_tree']) != (record['decision'] == 'already-fixed'):
+            raise ValueError('Conditional patch tree identities do not match its decision')
+
+
+def apply_preferences_patch(repo: Path, index: Path, record: dict, data: bytes) -> dict:
+    """Skip only a complete reverse-applicable fix; partial/unknown forms require review."""
+    paths = git_bytes(repo, 'apply', '--numstat', '-z', '-', data=data).stdout
+    changed = [item.split(b'\t', 2)[-1].decode('utf-8') for item in paths.split(b'\0') if item]
+    if len(changed) != len(PREFERENCES_PATHS) or set(changed) != PREFERENCES_PATHS:
+        raise ValueError('Preferences-lifetime patch must change exactly its three reviewed source paths')
+    before = checked_sha(git_bytes(repo, 'write-tree', index=index).stdout.decode().strip())
+    reverse = git_bytes(repo, 'apply', '--cached', '--reverse', '--check', '--whitespace=nowarn', '-',
+                        data=data, index=index, check=False)
+    if reverse.returncode == 0:
+        decision, reason = 'already-fixed', 'reverse-apply-check'
+    else:
+        forward = git_bytes(repo, 'apply', '--cached', '--check', '--whitespace=nowarn', '-',
+                            data=data, index=index, check=False)
+        if forward.returncode:
+            raise RuntimeError('Preferences-lifetime patch is partial or conflicts with upstream; '
+                               'review the official source instead of guessing an equivalent fix')
+        # Deliberately no --3way: it could silently complete a partial upstream
+        # fix, which this versioned, exact source contract does not authorize.
+        git_bytes(repo, 'apply', '--cached', '--whitespace=nowarn', '-', data=data, index=index)
+        if git_bytes(repo, 'apply', '--cached', '--reverse', '--check', '--whitespace=nowarn', '-',
+                     data=data, index=index, check=False).returncode:
+            raise RuntimeError('Applied preferences-lifetime patch failed its exact reverse verification')
+        decision, reason = 'applied', 'forward-apply-check'
+    after = checked_sha(git_bytes(repo, 'write-tree', index=index).stdout.decode().strip())
+    result = {key: record[key] for key in ('path', 'sha256', 'condition')}
+    result.update(input_tree=before, output_tree=after, decision=decision, reason=reason)
+    validate_conditional_patch_decisions([result])
+    return result
 
 
 @lru_cache(maxsize=4096)
@@ -190,7 +256,8 @@ def verified_bundle_inputs(repo: Path, snapshot: str, config: dict):
     return patches, owned
 
 
-def compose_bundle_tree(repo: Path, release: Release, patch_base: str, snapshot: str, config: dict):
+def compose_bundle_tree(repo: Path, release: Release, patch_base: str, snapshot: str, config: dict,
+                        conditional_decisions: list[dict] | None = None):
     if git_bytes(repo, 'cat-file', '-e', patch_base + '^{commit}', check=False).returncode:
         git(repo, 'fetch', '--no-tags', 'https://github.com/' + UPSTREAM + '.git', patch_base)
         if git(repo, 'rev-parse', 'FETCH_HEAD^{commit}') != patch_base:
@@ -203,6 +270,11 @@ def compose_bundle_tree(repo: Path, release: Release, patch_base: str, snapshot:
         index = Path(temporary) / 'index'
         git_bytes(repo, 'read-tree', release.commit_sha, index=index)
         for record, data in patches:
+            if 'condition' in record:
+                decision = apply_preferences_patch(repo, index, record, data)
+                if conditional_decisions is not None:
+                    conditional_decisions.append(decision)
+                continue
             component = record['optional_component']
             if component is not None:
                 paths = git_bytes(repo, 'apply', '--numstat', '-z', '-', data=data).stdout
@@ -265,7 +337,7 @@ def localization_patch(repo: Path, patch_base: str, snapshot: str, omitted: list
 
 
 def compose_source_tree(repo: Path, release: Release, patch_base: str,
-                        snapshot: str) -> tuple[str, str, list[str]]:
+                        snapshot: str, *, conditional_decisions: list[dict] | None = None) -> tuple[str, str, list[str]]:
     """Build official-tag + localization tree in an owned temporary index.
 
     The real candidate index/worktree and human translation commits are untouched.
@@ -276,7 +348,7 @@ def compose_source_tree(repo: Path, release: Release, patch_base: str,
     if checked_sha(config['source_base_sha']) != checked_sha(patch_base):
         raise ValueError('Composition patch base differs from the immutable configuration')
     if config['schema'] == 2:
-        return compose_bundle_tree(repo, release, patch_base, snapshot, config)
+        return compose_bundle_tree(repo, release, patch_base, snapshot, config, conditional_decisions)
     native_version = cmake_version(git(repo, 'show', release.commit_sha + ':CMakeLists.txt'))
     omitted = omitted_components(repo, patch_base, snapshot, release.commit_sha)
     patch = localization_patch(repo, patch_base, snapshot, omitted)

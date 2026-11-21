@@ -70,6 +70,72 @@ namespace
             return prefix + QStringLiteral("-macOS-") + architecture + QStringLiteral(".dmg");
         return QString();
     }
+
+    QStringList publicationAssetNames(const QString& tag)
+    {
+        const QString prefix = QStringLiteral("OpenRV-") + tag.mid(1);
+        QStringList names;
+        for (const QString& suffix : {QStringLiteral("-Windows-x64-Setup.exe"), QStringLiteral("-Windows-x64-Portable.zip"),
+                                      QStringLiteral("-Windows-x64.sha256.txt"), QStringLiteral("-macOS-x86_64.dmg"),
+                                      QStringLiteral("-macOS-x86_64.zip"), QStringLiteral("-macOS-x86_64.sha256.txt"),
+                                      QStringLiteral("-macOS-arm64.dmg"), QStringLiteral("-macOS-arm64.zip"),
+                                      QStringLiteral("-macOS-arm64.sha256.txt"), QStringLiteral("-source.provenance.json"),
+                                      QStringLiteral("-generated-localization.patch.zip"), QStringLiteral("-source.sha256.txt")})
+            names.append(prefix + suffix);
+        return names;
+    }
+
+    bool publicationMarker(const QString& body, const QString& tag, quint64& build, QJsonObject& hashes)
+    {
+        const QString identifier = QStringLiteral("openrv-publication");
+        if (body.count(identifier, Qt::CaseInsensitive) != 1)
+            return false;
+        static const QRegularExpression line(QStringLiteral("(?:\\A|\\n)<!-- openrv-publication: ([^\\r\\n]+) -->(?=\\r?\\n|\\z)"));
+        const QRegularExpressionMatch match = line.match(body);
+        if (!match.hasMatch() || match.captured(1).toUtf8().size() > 16384)
+            return false;
+        QJsonParseError error;
+        const QJsonDocument document = QJsonDocument::fromJson(match.captured(1).toUtf8(), &error);
+        if (error.error != QJsonParseError::NoError || !document.isObject())
+            return false;
+        const QJsonObject marker = document.object();
+        if (marker.size() != 4 || !marker.value(QStringLiteral("schema")).isDouble()
+            || marker.value(QStringLiteral("schema")).toDouble() != 1
+            || marker.value(QStringLiteral("tag")).toString() != tag
+            || !marker.value(QStringLiteral("buildNumber")).isString()
+            || !marker.value(QStringLiteral("assets")).isObject())
+            return false;
+        static const QRegularExpression counter(QStringLiteral("\\A[1-9][0-9]*\\z"));
+        const QString number = marker.value(QStringLiteral("buildNumber")).toString();
+        bool valid = false;
+        build = number.toULongLong(&valid);
+        if (!counter.match(number).hasMatch() || !valid || !build)
+            return false;
+        hashes = marker.value(QStringLiteral("assets")).toObject();
+        const QStringList names = publicationAssetNames(tag);
+        if (hashes.size() != names.size())
+            return false;
+        static const QRegularExpression digest(QStringLiteral("\\Asha256:[0-9a-f]{64}\\z"));
+        for (const QString& name : names)
+        {
+            const QJsonValue hash = hashes.value(name);
+            if (!hash.isString() || !digest.match(hash.toString()).hasMatch())
+                return false;
+        }
+        // QJsonObject coalesces duplicate keys. In this finite schema all
+        // values are constrained strings/numbers except the one assets map;
+        // count raw member tokens too, so repeated keys (including escaped
+        // spellings) cannot silently replace an earlier value.
+        static const QRegularExpression member(QStringLiteral("\"(?:[^\"\\\\]|\\\\.)*\"\\s*:"));
+        auto members = member.globalMatch(match.captured(1));
+        int count = 0;
+        while (members.hasNext())
+        {
+            members.next();
+            ++count;
+        }
+        return count == 4 + names.size();
+    }
 }
 
 namespace Rv
@@ -166,6 +232,37 @@ namespace Rv
                 return {{}, ParseError::InvalidAsset};
             ReleaseInfo release{version, releaseUrl, QUrl()};
             const QString expected = expectedAssetName(version.tag, platform, architecture);
+            const QJsonValue body = object.value(QStringLiteral("body"));
+            if (!body.isUndefined() && !body.isNull() && !body.isString())
+                return {{}, ParseError::InvalidRelease};
+            if (body.toString().contains(QStringLiteral("openrv-publication"), Qt::CaseInsensitive))
+            {
+                quint64 build = 0;
+                QJsonObject hashes;
+                if (!version.officialTag || !publicationMarker(body.toString(), version.tag, build, hashes)
+                    || assetsValue.toArray().size() != hashes.size())
+                    return {{}, ParseError::InvalidAsset};
+                QSet<QString> seen;
+                for (const QJsonValue& value : assetsValue.toArray())
+                {
+                    if (!value.isObject())
+                        return {{}, ParseError::InvalidAsset};
+                    const QJsonObject asset = value.toObject();
+                    const QString name = asset.value(QStringLiteral("name")).toString();
+                    const QUrl url(repositoryRoot + QStringLiteral("/releases/download/") + version.tag + '/' + name);
+                    if (!hashes.contains(name) || seen.contains(name)
+                        || asset.value(QStringLiteral("state")).toString() != QStringLiteral("uploaded")
+                        || !validAssetSize(asset.value(QStringLiteral("size")))
+                        || asset.value(QStringLiteral("digest")) != hashes.value(name)
+                        || !exactUrl(asset.value(QStringLiteral("browser_download_url")), url))
+                        return {{}, ParseError::InvalidAsset};
+                    seen.insert(name);
+                    if (!expected.isEmpty() && name == expected)
+                        release.downloadUrl = url;
+                }
+                release.version.buildNumber = build;
+                return {release, ParseError::None};
+            }
             const QStringList suffixes = officialAssetSuffixes(platform, architecture);
             QStringList escapedSuffixes;
             for (const QString& suffix : suffixes)

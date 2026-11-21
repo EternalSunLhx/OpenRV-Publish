@@ -357,11 +357,13 @@ class StandaloneBuildNumberTests(unittest.TestCase):
                 mock.patch.object(sys, 'argv', self.arguments('preflight')), \
                 mock.patch.object(release, 'git', side_effect=lambda repo, *args: CURRENT if args[0] == 'rev-parse' else ''), \
                 mock.patch.object(workspace, 'official_release', return_value=official), \
+                mock.patch.object(workspace.OfficialApi, 'request', return_value=(404, {})) as read_target, \
                 mock.patch('publication_tags.resolve_publication_commit', return_value=CURRENT), \
                 mock.patch.object(workspace, 'prepare_workspace', return_value=({'build_number': 29}, 'b' * 64)) as prepare, \
                 mock.patch.object(release, 'output_values') as output:
             release.main()
         self.assertEqual(prepare.call_args.args[-1], 29)
+        read_target.assert_called_once_with('GET', workspace.TARGET, 'releases/tags/v4.0.2')
         self.assertEqual(prepare.call_args.kwargs['publication_commit'], CURRENT)
         self.assertEqual(output.call_args.args[0]['build_number'], '29')
 
@@ -377,7 +379,7 @@ class StandaloneBuildNumberTests(unittest.TestCase):
                 stack.enter_context(mock.patch.dict(os.environ, self.environment(product='29'), clear=True))
                 stack.enter_context(mock.patch.object(sys, 'argv', self.arguments(phase)))
                 stack.enter_context(mock.patch.object(release, 'git', return_value=CURRENT))
-                stack.enter_context(mock.patch.object(release, 'publish_assets'))
+                stack.enter_context(mock.patch.object(release, 'publish_assets', return_value={'status': 'published'}))
                 stack.enter_context(mock.patch('assemble_release.assemble'))
                 stack.enter_context(mock.patch('publication_tags.sync_publication_tag', return_value=False))
                 stack.enter_context(mock.patch('publication_tags.verify_publication_tag'))

@@ -169,6 +169,9 @@ def validate_plan(plan: dict) -> None:
     build_number(plan.get('build_number'))
     if plan['schema'] == 4:
         w.checked_sha(plan.get('publication_commit'))
+        w.validate_conditional_patch_decisions(plan.get('conditional_patch_decisions', []))
+    elif 'conditional_patch_decisions' in plan:
+        raise ValueError('Source plan schema does not match conditional maintenance patch provenance')
     if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', plan.get('native_version', '')):
         raise ValueError('Invalid native source version')
     if not isinstance(plan.get('omitted_upstream_components'), list):
@@ -231,9 +234,12 @@ def verify_composition(repo: Path, plan: dict, delta: bytes, *, expected_snapsho
         if anchor_config['schema'] != 2:
             raise ValueError('Publication anchor is not an owned lightweight maintenance commit')
         w.verified_bundle_inputs(repo, anchor, anchor_config)
-    tree, patch_hash, omitted = w.compose_source_tree(repo, release, boundary, plan['localization_snapshot'])
+    conditional_decisions = []
+    tree, patch_hash, omitted = w.compose_source_tree(repo, release, boundary, plan['localization_snapshot'],
+                                                     conditional_decisions=conditional_decisions)
     if (tree != plan['composed_tree'] or patch_hash != plan['feature_patch_sha256']
-            or omitted != plan['omitted_upstream_components']):
+            or omitted != plan['omitted_upstream_components']
+            or conditional_decisions != plan.get('conditional_patch_decisions', [])):
         raise ValueError('Official source plus maintenance patch composition differs')
     final_tree = generated_tree(repo, tree, delta)
     if final_tree != plan['patched_tree']:
@@ -312,7 +318,9 @@ def prepare_workspace(trusted: Path, destination: Path, output: Path, release, n
     subprocess.run(['git', 'clone', '--no-checkout', '--no-hardlinks', str(trusted), str(destination)],
                    env=w.git_environment(), check=True, capture_output=True, timeout=180)
     official_tree = w.fetch_official_release(destination, release)
-    tree, feature_hash, omitted = w.compose_source_tree(destination, release, boundary, snapshot)
+    conditional_decisions = []
+    tree, feature_hash, omitted = w.compose_source_tree(destination, release, boundary, snapshot,
+                                                       conditional_decisions=conditional_decisions)
     set_workspace_tree(destination, release, tree, lightweight=lightweight)
     checker(trusted, destination, output)
     changed = w.git_bytes(destination, 'diff', '--name-only', '-z').stdout
@@ -330,7 +338,8 @@ def prepare_workspace(trusted: Path, destination: Path, output: Path, release, n
             'workflow_tree': w.git(destination, 'rev-parse', snapshot + ':.github/workflows')}
     if lightweight:
         plan.update(schema=4, kind='official-tag-patch-workspace',
-                    publication_commit=w.checked_sha(publication_commit))
+                    publication_commit=w.checked_sha(publication_commit),
+                    conditional_patch_decisions=conditional_decisions)
     verify_composition(destination, plan, delta, expected_snapshot=snapshot, expected_build=number)
     (output / 'generated-localization.patch').write_bytes(delta)
     encoded = (json.dumps(plan, indent=2, sort_keys=True) + '\n').encode()

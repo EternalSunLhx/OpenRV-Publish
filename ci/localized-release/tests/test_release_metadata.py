@@ -103,19 +103,64 @@ class OfficialReleaseMetadataTests(unittest.TestCase):
 
 
 class MacBundleVersionTests(unittest.TestCase):
-    def test_bundle_records_official_and_native_versions_before_signing(self):
+    def package(self):
         spec = importlib.util.spec_from_file_location('release_metadata_macos_packager', CI / 'package-macos.py')
         package = importlib.util.module_from_spec(spec); spec.loader.exec_module(package)
+        return package
+
+    def test_bundle_records_official_and_native_versions_before_signing(self):
+        package = self.package()
         with tempfile.TemporaryDirectory() as directory:
             app = Path(directory) / 'RV.app'
             contents = app / 'Contents'; contents.mkdir(parents=True)
             path = contents / 'Info.plist'
-            path.write_bytes(plistlib.dumps({'CFBundleShortVersionString': '4.0.0', 'LSMinimumSystemVersion': '14.0'}))
+            original = {'CFBundleShortVersionString': '4.0.0', 'LSMinimumSystemVersion': '14.0',
+                        'CFBundleName': 'RV', 'CFBundleExecutable': 'RV', 'CFBundleIdentifier': 'com.autodesk.RV',
+                        'CFBundleURLTypes': [{'CFBundleURLSchemes': ['rvlink']}], 'CFBundleIconFile': 'RV.icns',
+                        'NSHumanReadableCopyright': 'Retained upstream copyright'}
+            path.write_bytes(plistlib.dumps(original))
             package.update_bundle_metadata(app, {'version': '4.0.3', 'nativeVersion': '4.0.0', 'releaseVersion': '4.0.3-zh.2'}, '13.0')
             info = plistlib.loads(path.read_bytes())
             self.assertEqual((info['CFBundleShortVersionString'], info['CFBundleVersion']), ('4.0.3', '4.0.3'))
             self.assertEqual((info['OpenRVReleaseVersion'], info['OpenRVNativeVersion']), ('4.0.3-zh.2', '4.0.0'))
             self.assertEqual(info['LSMinimumSystemVersion'], '14.0')
+            self.assertEqual((info['CFBundleName'], info['CFBundleDisplayName']), ('OpenRV', 'OpenRV'))
+            for key in ('CFBundleExecutable', 'CFBundleIdentifier', 'CFBundleURLTypes', 'CFBundleIconFile',
+                        'NSHumanReadableCopyright'):
+                self.assertEqual(info[key], original[key])
+
+    def test_bundle_is_renamed_before_runtime_without_changing_internal_files(self):
+        package = self.package()
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / '_install_release'
+            app = installed / 'RV.app'
+            contents = app / 'Contents'
+            (contents / 'MacOS').mkdir(parents=True)
+            (contents / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': 'RV'}))
+            executable = contents / 'MacOS' / 'RV'
+            executable_data = b'unchanged native executable fixture'
+            executable.write_bytes(executable_data)
+            renamed = package.prepare_app_bundle(app)
+            self.assertEqual(renamed, installed / 'OpenRV.app')
+            self.assertFalse(app.exists())
+            self.assertEqual((renamed / 'Contents/MacOS/RV').read_bytes(), executable_data)
+            self.assertEqual(package.prepare_app_bundle(renamed), renamed)
+            self.assertEqual((renamed / 'Contents/MacOS/RV').read_bytes(), executable_data)
+
+    def test_bundle_rename_refuses_existing_destination_without_touching_either_bundle(self):
+        package = self.package()
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / 'RV.app'
+            (app / 'Contents').mkdir(parents=True)
+            (app / 'Contents/Info.plist').write_bytes(b'original source')
+            existing = Path(directory) / 'OpenRV.app'
+            existing.mkdir()
+            marker = existing / 'existing.txt'
+            marker.write_bytes(b'existing destination')
+            with self.assertRaises(FileExistsError):
+                package.prepare_app_bundle(app)
+            self.assertEqual((app / 'Contents/Info.plist').read_bytes(), b'original source')
+            self.assertEqual(marker.read_bytes(), b'existing destination')
 
 
 if __name__ == '__main__':
