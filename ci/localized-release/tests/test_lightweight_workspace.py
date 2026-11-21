@@ -1,8 +1,10 @@
 """Real local Git compositions from patches and owned files, without shared ancestry."""
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import unittest
 from unittest import mock
 
@@ -11,6 +13,33 @@ import official_workspace as workspace
 
 
 class LightweightWorkspaceTests(unittest.TestCase):
+    def test_private_plan_binding_rejects_foreign_hash_and_restores_production_environment(self):
+        inherited = {'ORV_BUILD_PLAN_SHA256': 'a798a140b674e50f7776d342e209dc85832d2e6e1e3d84bd0fdf5a95da07b418',
+                     'ORV_BUILD_NUMBER': '32', 'ORV_RELEASE_TAG': 'v4.1.0'}
+        outer = os.environ.copy()
+        with mock.patch.dict(os.environ, inherited):
+            caller = os.environ.copy()
+            with self.assertRaisesRegex(RuntimeError, 'private fixture exit'):
+                with lightweight_fixture(include_metadata=True) as f:
+                    plan, digest, inputs = prepare_fixture(f)
+                    self.assertEqual(digest, hashlib.sha256((inputs / 'build-plan.json').read_bytes()).hexdigest())
+                    self.assertEqual(os.environ['ORV_BUILD_PLAN_SHA256'], digest)
+                    self.assertNotEqual(digest, inherited['ORV_BUILD_PLAN_SHA256'])
+                    self.assertEqual(os.environ['ORV_RELEASE_TAG'], 'v4.0.3')
+                    self.assertEqual(os.environ['ORV_BUILD_NUMBER'], '29')
+                    repo = f['root'] / 'bound-matrix'
+                    subprocess.run(['git', 'clone', '--no-hardlinks', str(f['trusted']), str(repo)],
+                                   env=workspace.watcher().git_environment(), check=True, capture_output=True)
+                    workspace.materialize(repo, inputs, digest, f['snapshot'], 29)
+                    self.assertEqual(workspace.verify_materialized(repo)['build_number'], 29)
+                    with mock.patch.dict(os.environ, {'ORV_BUILD_PLAN_SHA256': inherited['ORV_BUILD_PLAN_SHA256']}):
+                        with self.assertRaisesRegex(ValueError, 'preflight SHA256'):
+                            workspace.verify_materialized(repo)
+                    self.assertEqual(workspace.verify_materialized(repo), plan)
+                    raise RuntimeError('private fixture exit')
+            self.assertTrue(os.environ.copy() == caller, 'Private fixture did not restore its caller environment')
+        self.assertTrue(os.environ.copy() == outer, 'Production-environment regression leaked process changes')
+
     def commit_config(self, fixture, configuration):
         fixture['write'](fixture['trusted'], workspace.watcher().LOCALIZATION_BASE_FILE,
                          json.dumps(configuration, indent=2) + '\n')

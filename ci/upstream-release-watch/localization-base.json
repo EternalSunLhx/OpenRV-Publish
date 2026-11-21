@@ -43,7 +43,7 @@
       "source": "ci/localized-release/OpenRV.iss",
       "destination": "ci/localized-release/OpenRV.iss",
       "mode": "100644",
-      "sha256": "d7799ae872f7eb36acfbbeab8c8c6b21ea9e3c2f5f4cba252bb9810614f4e121",
+      "sha256": "c971e6297c881a0eaf88ed35867e2cd4ae6861e9b943b82257c1cb93ccbbdad1",
       "replace": false
     },
     {
@@ -337,7 +337,7 @@
       "source": "ci/localized-release/tests/lightweight_fixture.py",
       "destination": "ci/localized-release/tests/lightweight_fixture.py",
       "mode": "100644",
-      "sha256": "43115f8fb6135be167b6cc4cfd24abc1ece7ef950cce78606dab0a9f58b015b6",
+      "sha256": "8cab5e6925d79f3bc0fcaeb463ce0797623ebd0d3f7acb0891998bdd867c089e",
       "replace": false
     },
     {
@@ -358,7 +358,7 @@
       "source": "ci/localized-release/tests/test_lightweight_workspace.py",
       "destination": "ci/localized-release/tests/test_lightweight_workspace.py",
       "mode": "100644",
-      "sha256": "502d99ba03e1f259aa18fdb6903ab50e8c1ad02c58b07f54d35b9bb5a22c4955",
+      "sha256": "002fc93182b54788cd5ea29aa9e91219966621f4c02ca34d2c1e8f29fbebc2e4",
       "replace": false
     },
     {

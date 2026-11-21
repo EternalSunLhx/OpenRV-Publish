@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -17,7 +18,8 @@ import official_workspace as workspace
 @contextmanager
 def lightweight_fixture(*, include_metadata=False, optional='absent', annotated=False):
     w = workspace.watcher()
-    with tempfile.TemporaryDirectory(prefix='openrv-light-fixture-') as directory:
+    with tempfile.TemporaryDirectory(prefix='openrv-light-fixture-') as directory, \
+            mock.patch.dict(os.environ, {'ORV_BUILD_PLAN_SHA256': '', 'ORV_RELEASE_TAG': '', 'ORV_BUILD_NUMBER': ''}):
         root = Path(directory)
         upstream, trusted = root / 'upstream', root / 'trusted'
 
@@ -131,4 +133,11 @@ def prepare_fixture(fixture, *, number=29, publication_commit=None, name='source
     plan, digest = workspace.prepare_workspace(fixture['trusted'], fixture['root'] / name, output,
         fixture['release'], number, checker=checker,
         publication_commit=publication_commit or fixture['snapshot'])
+    # CMake children and direct metadata calls must validate this private plan,
+    # never the enclosing production workflow's unrelated immutable input.
+    actual_digest = hashlib.sha256((output / 'build-plan.json').read_bytes()).hexdigest()
+    if actual_digest != digest:
+        raise AssertionError('Private fixture serialized plan differs from its reported digest')
+    os.environ.update(ORV_BUILD_PLAN_SHA256=actual_digest,
+                      ORV_RELEASE_TAG=plan['official']['tag'], ORV_BUILD_NUMBER=str(plan['build_number']))
     return plan, digest, output
