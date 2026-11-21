@@ -1,0 +1,7 @@
+/_release_work/
+/dist/
+/artifacts/
+/.tools/
+/.venv/
+__pycache__/
+*.pyc

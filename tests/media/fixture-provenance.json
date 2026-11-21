@@ -1,0 +1,19 @@
+{
+  "fixture": "h264-aac-stereo.mp4",
+  "sha256": "2d8ec77bbe47cab7da42db7d50455502ae01106f8b6cee59a5c817eda0853947",
+  "bytes": 12100,
+  "content": "Synthetic testsrc2 video plus a synthesized 440-Hz sine. No external or user media.",
+  "durationSeconds": 1,
+  "video": {"codec": "h264", "profile": "High", "pixelFormat": "yuv420p", "width": 64, "height": 48, "framesPerSecond": 24},
+  "audio": {"codec": "aac", "profile": "LC", "sampleRate": 48000, "channels": 2, "toneFrequencyHz": 440},
+  "tool": {
+    "package": "imageio-ffmpeg==0.6.0",
+    "source": "https://pypi.org/project/imageio-ffmpeg/0.6.0/",
+    "wheel": "imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl",
+    "wheelSha256": "02fa47c83703c37df6bfe4896aab339013f62bf02c5ebf2dce6da56af04ffc0a",
+    "binaryEntry": "imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe",
+    "binarySha256": "2ce797a0f88d7f067180338fb227f7b1928ea727bd9a4d7a1d022f7c52af71a3",
+    "shippedWithOpenRV": false
+  },
+  "generateArguments": ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=64x48:rate=24:duration=1", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1", "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "30", "-threads", "1", "-c:a", "aac", "-b:a", "64k", "-ac", "2", "-t", "1", "-movflags", "+faststart", "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact", "h264-aac-stereo.mp4"]
+}

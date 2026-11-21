@@ -1,0 +1,2968 @@
+diff --git a/.gitignore b/.gitignore
+index dc30cac0d19a96db656c83e998552cb245050c30..5e0619250d8899e72a01c07c29751c722beb7550 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -53,3 +53,11 @@ about_rv.cpp
+ 
+ # Dear ImgGui generated
+ imgui.ini
++
++# Local toolchains and installed build payloads
++/.tools/
++/_install_release/
++/dist/
++/artifacts/
++
++/_release_work/
+diff --git a/cmake/dependencies/ffmpeg.cmake b/cmake/dependencies/ffmpeg.cmake
+index 79ceaca367d1c4963b5d549c34da2fd259b2b55f..695246fadd5a4839d31fe04765aee06d66563c53 100644
+--- a/cmake/dependencies/ffmpeg.cmake
++++ b/cmake/dependencies/ffmpeg.cmake
+@@ -279,7 +279,11 @@ IF(NOT RV_FFMPEG_CONFIG_OPTIONS)
+     ENDIF()
+   ENDFOREACH()
+ 
+-  LIST(APPEND _disabled_parsers "--disable-parser=vp9")
++  # The native VP9 decoder requires its parser for raw/packetized sources.
++  # Preserve upstream defaults unless this decoder was explicitly selected.
++  IF(NOT "vp9" IN_LIST RV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE)
++    LIST(APPEND _disabled_parsers "--disable-parser=vp9")
++  ENDIF()
+ 
+   LIST(APPEND _disabled_filters "--disable-filter=geq")
+ 
+diff --git a/src/bin/apps/rv/main.cpp b/src/bin/apps/rv/main.cpp
+index f2eaeb1cefbec2dbc4a2f7fc8c026482628158f5..9f858cd9096ae51367ae2d7b10221ee2b0cae0b3 100644
+--- a/src/bin/apps/rv/main.cpp
++++ b/src/bin/apps/rv/main.cpp
+@@ -34,6 +34,7 @@
+ #include "../../utf8Main.h"
+ #include <RvCommon/QTUtils.h>
+ #include <RvCommon/RvApplication.h>
++#include <RvCommon/RvLanguage.h>
+ #include <RvCommon/RvConsoleWindow.h>
+ #include <RvCommon/MuUICommands.h>
+ #include <RvCommon/PyUICommands.h>
+@@ -350,6 +351,7 @@ int utf8Main(int argc, char* argv[])
+         setEnvVar("ORIGINALLOCAL", "en");
+     }
+ 
++    Rv::captureSystemInterfaceLanguage();
+     setPlatformSpecificLocale();
+ 
+     // Refresh the locale using the environment variable set by
+@@ -640,13 +642,6 @@ int utf8Main(int argc, char* argv[])
+         TwkApp::initializeCrashHandler("RV", QCoreApplication::applicationDirPath().toStdString());
+     }
+ 
+-    QTranslator* translator = new QTranslator();
+-    QLocale locale = QLocale(getenv("ORIGINALLOCAL"));
+-    if (translator->load(locale, QLatin1String("i18n"), "_", QLatin1String(":/translations")))
+-    {
+-        app->installTranslator(translator);
+-    }
+-
+     QDir dir(QCoreApplication::applicationDirPath());
+     dir.cdUp();
+     dir.cd("plugins");
+diff --git a/src/bin/nsapps/RV/main.cpp b/src/bin/nsapps/RV/main.cpp
+index caf6aa891418288b1a905e7dfac7470a73631f44..8dfc5170cb4bd5b5879898e98bd9833d8b37e1ed 100644
+--- a/src/bin/nsapps/RV/main.cpp
++++ b/src/bin/nsapps/RV/main.cpp
+@@ -26,6 +26,7 @@
+ #include <RvApp/PyCommandsModule.h>
+ #include <RvCommon/QTUtils.h>
+ #include <RvCommon/RvApplication.h>
++#include <RvCommon/RvLanguage.h>
+ #include <RvCommon/RvConsoleWindow.h>
+ #include <RvCommon/RvDocument.h>
+ #include <RvCommon/RvPreferences.h>
+@@ -282,6 +283,7 @@ int main(int argc, char* argv[])
+         setenv("ORIGINALLOCAL", "en", 1);
+     }
+ 
++    Rv::captureSystemInterfaceLanguage();
+     setPlatformSpecificLocale();
+ 
+     //
+@@ -606,13 +608,6 @@ int main(int argc, char* argv[])
+         TwkApp::initializeCrashHandler("RV", QCoreApplication::applicationDirPath().toStdString());
+     }
+ 
+-    QTranslator* translator = new QTranslator();
+-    QLocale locale = QLocale(getenv("ORIGINALLOCAL"));
+-    if (translator->load(locale, QLatin1String("i18n"), "_", QLatin1String(":/translations")))
+-    {
+-        app->installTranslator(translator);
+-    }
+-
+ #ifdef PLATFORM_DARWIN
+     //
+     //  As of Qt 4.7, the qt.conf file in Contents/Resources no longer
+diff --git a/src/build/make_openssl.py b/src/build/make_openssl.py
+index 32adc5ed4bef09054e3cbf86484ebbd68cad7c6a..b7ab1b5b226412032654462c367032e80f80a2bd 100644
+--- a/src/build/make_openssl.py
++++ b/src/build/make_openssl.py
+@@ -210,7 +210,7 @@ def build() -> None:
+         # to significantly speed up the Windows build. Falls back to nmake.
+         _has_jom = bool(shutil.which("jom"))
+         if _has_jom:
+-            build_args = ["jom", f"/J{os.cpu_count() or 1}"]
++            build_args = ["jom", f"/J{int(os.environ.get('ORV_JOBS') or (os.cpu_count() or 1))}"]
+             build_env = os.environ.copy()
+             # /FS serializes PDB writes through mspdbsrv.exe as a safety net.
+             build_env["CL"] = build_env.get("CL", "") + " /FS"
+diff --git a/src/build/make_pyside6.py b/src/build/make_pyside6.py
+index addc003c252bfd239f0ec197f93147aa39bd1e74..bf9be2466311f084d5d8ed0c107385fb8a2a9cf1 100755
+--- a/src/build/make_pyside6.py
++++ b/src/build/make_pyside6.py
+@@ -297,7 +297,7 @@ def build() -> None:
+         "--verbose",
+         "--verbose-build",
+         "--log-level=verbose",
+-        f"--parallel={os.cpu_count() or 1}",
++        f"--parallel={int(os.environ.get('ORV_JOBS') or (os.cpu_count() or 1))}",
+     ]
+ 
+     if OPENSSL_OUTPUT_DIR:
+diff --git a/src/build/quoteFile.py b/src/build/quoteFile.py
+index ef4e501df80957b8a01a4ff4a858acc833707cf0..6eaa8adf4058a1501b588f6b58c1a18db4dead81 100755
+--- a/src/build/quoteFile.py
++++ b/src/build/quoteFile.py
+@@ -22,8 +22,8 @@ infilename = sys.argv[index]
+ outfilename = sys.argv[index + 1]
+ cppname = sys.argv[index + 2]
+ 
+-infile = open(infilename, "r")
+-outfile = open(outfilename, "w")
++infile = open(infilename, "r", encoding="utf-8")
++outfile = open(outfilename, "w", encoding="utf-8")
+ lines = infile.readlines()
+ 
+ outfile.write("//\n")
+diff --git a/src/lib/app/RvCommon/CMakeLists.txt b/src/lib/app/RvCommon/CMakeLists.txt
+index 7a6219147b2a45d6083e3f38d9391b7b673d72c6..5b21a04e967280749df2c5f934ef93aae359cfa8 100644
+--- a/src/lib/app/RvCommon/CMakeLists.txt
++++ b/src/lib/app/RvCommon/CMakeLists.txt
+@@ -25,7 +25,7 @@ SET(CMAKE_AUTORCC
+ # This find_package statement is also required to find QT's build tools like 'uic' required just below. Keep this line before 'qt5_wrap_ui'
+ FIND_PACKAGE(
+   ${RV_QT_PACKAGE_NAME}
+-  COMPONENTS Core Gui OpenGL Widgets ${QT6_QOPENGLWIDGET_COMPONENT}
++  COMPONENTS Core Gui Network OpenGL Widgets ${QT6_QOPENGLWIDGET_COMPONENT}
+   REQUIRED
+ )
+ 
+@@ -46,6 +46,8 @@ SET(_sources
+     RvDocument.cpp
+     RvConsoleApplication.cpp
+     RvApplication.cpp
++    RvLanguage.cpp
++    RvUpdateChecker.cpp
+     DiagnosticsView.cpp
+     GLView.cpp
+     GLWindow.cpp
+@@ -389,10 +391,48 @@ ADD_CUSTOM_TARGET(
+ 
+ LIST(APPEND _sources ${_about_rv_cpp})
+ 
++# Build the application catalog from TS rather than embedding the historical,
++# empty tracked QM. The generated resource has its own path and explicit link
++# reference in RvLanguage.cpp, so static-library dead stripping cannot omit it.
++FIND_PACKAGE(${RV_QT_PACKAGE_NAME} COMPONENTS LinguistTools REQUIRED)
++SET(_rv_language_ts "${CMAKE_CURRENT_SOURCE_DIR}/qrc/translations/i18n_zh.ts")
++SET(_rv_language_qm "${CMAKE_CURRENT_BINARY_DIR}/translations/i18n_zh_CN.qm")
++SET(_rv_language_qrc "${CMAKE_CURRENT_BINARY_DIR}/RvLanguage.qrc")
++ADD_CUSTOM_COMMAND(
++  OUTPUT "${_rv_language_qm}"
++  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/translations"
++  COMMAND $<TARGET_FILE:${RV_QT_PACKAGE_NAME}::lrelease> "${_rv_language_ts}" -qm "${_rv_language_qm}"
++  DEPENDS "${_rv_language_ts}" ${RV_QT_PACKAGE_NAME}::lrelease
++  COMMENT "Compiling OpenRV Chinese interface translations"
++  VERBATIM
++)
++ADD_CUSTOM_TARGET(generate_rv_language_qm DEPENDS "${_rv_language_qm}")
++SET_SOURCE_FILES_PROPERTIES("${_rv_language_qm}" PROPERTIES GENERATED TRUE)
++FILE(GENERATE OUTPUT "${_rv_language_qrc}" CONTENT
++  "<RCC><qresource prefix=\"/openrv/translations\"><file alias=\"i18n_zh_CN.qm\">${_rv_language_qm}</file></qresource></RCC>\n")
++
++# AUTORCC creates a separate utility target which can run before the QM
++# generator despite add_dependencies(RvCommon ...). Keep this generated catalog
++# on an explicit file-level chain: TS -> QM -> resource C++ -> compiled object.
++SET(_rv_language_cpp "${CMAKE_CURRENT_BINARY_DIR}/qrc_RvLanguage.cpp")
++ADD_CUSTOM_COMMAND(
++  OUTPUT "${_rv_language_cpp}"
++  COMMAND $<TARGET_FILE:${RV_QT_PACKAGE_NAME}::rcc> --name RvLanguage --output "${_rv_language_cpp}" "${_rv_language_qrc}"
++  DEPENDS "${_rv_language_qm}" "${_rv_language_qrc}" ${RV_QT_PACKAGE_NAME}::rcc
++  COMMENT "Embedding OpenRV interface translation resources"
++  VERBATIM
++)
++SET_SOURCE_FILES_PROPERTIES("${_rv_language_cpp}" PROPERTIES
++  GENERATED TRUE SKIP_AUTOMOC ON SKIP_AUTOUIC ON SKIP_AUTORCC ON)
++
++INCLUDE("${CMAKE_CURRENT_SOURCE_DIR}/RvLocalizedBuild.cmake")
++RV_CONFIGURE_LOCALIZED_BUILD("${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/generated" "${RV_MAJOR_VERSION}.${RV_MINOR_VERSION}.${RV_REVISION_NUMBER}")
++
+ ADD_LIBRARY(
+   ${_target} STATIC
+-  ${_sources} qrc/RvCommon.qrc
++  ${_sources} qrc/RvCommon.qrc "${_rv_language_cpp}"
+ )
++ADD_DEPENDENCIES(${_target} generate_rv_language_qm)
+ 
+ # Ensure about_rv.cpp is generated before building RvCommon
+ ADD_DEPENDENCIES(${_target} generate_about_rv_cpp)
+@@ -407,6 +447,7 @@ ENDIF()
+ TARGET_INCLUDE_DIRECTORIES(
+   ${_target}
+   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
++  PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
+ )
+ 
+ TARGET_LINK_LIBRARIES(
+@@ -426,6 +467,7 @@ TARGET_LINK_LIBRARIES(
+          Boost::thread
+          Qt::Core
+          Qt::Gui
++         Qt::Network
+          Qt::Widgets
+          Qt::OpenGL
+          ${QT6_QOPENGLWIDGET_TARGET}
+diff --git a/src/lib/app/RvCommon/MuUICommands.cpp b/src/lib/app/RvCommon/MuUICommands.cpp
+index 390fe6833ee145a7d81e5ea9239b2626b5e1ea2f..9fab7953a8d9e6bc4edbf4a2041fc08c721aae4f 100644
+--- a/src/lib/app/RvCommon/MuUICommands.cpp
++++ b/src/lib/app/RvCommon/MuUICommands.cpp
+@@ -161,6 +161,11 @@ namespace Rv
+             new Function(c, "popupMenu", popupMenu, None, Return, "void", Parameters, new Param(c, "event", "Event"),
+                          new Param(c, "menu", "MenuItem[]", Value(Pointer(0))), End),
+ 
++            // Explicit display translation for reviewed, shipped HUD menus only.
++            new Function(c, "popupMenuLocalized", popupMenuLocalized, None, Return, "void", Parameters,
++                         new Param(c, "event", "Event"), new Param(c, "menu", "MenuItem[]"),
++                         new Param(c, "scope", "string"), End),
++
+             new Function(c, "popupMenuAtPoint", popupMenuAtPoint, None, Return, "void", Parameters, new Param(c, "x", "int"),
+                          new Param(c, "y", "int"), new Param(c, "menu", "MenuItem[]", Value(Pointer(0))), End),
+ 
+@@ -468,7 +473,7 @@ namespace Rv
+         NODE_RETURN(rvDoc->startupResize());
+     }
+ 
+-    static void popupMenuInternal(DynamicArray* array, QPoint& location)
++    static void popupMenuInternal(DynamicArray* array, QPoint& location, const std::string& menuName = "temp")
+     {
+         Session* s = Session::currentSession();
+         RvDocument* rvDoc = (RvDocument*)s->opaquePointer();
+@@ -486,7 +491,7 @@ namespace Rv
+ 
+         if (array)
+         {
+-            if (TwkApp::Menu* m = createTwkAppMenu("temp", array))
++            if (TwkApp::Menu* m = createTwkAppMenu(menuName, array))
+             {
+                 rvDoc->popupMenu(m, p);
+             }
+@@ -525,6 +530,56 @@ namespace Rv
+         popupMenuInternal(array, lp);
+     }
+ 
++    // Prefer the active backend widget on newer upstream revisions. Official
++    // releases before viewWidget() expose their OpenGL widget through view().
++    template <typename Document>
++    static auto localizedPopupView(Document* document, int) -> decltype(document->viewWidget())
++    {
++        return document->viewWidget();
++    }
++
++    template <typename Document>
++    static auto localizedPopupView(Document* document, long) -> decltype(document->view())
++    {
++        return document->view();
++    }
++
++    NODE_IMPLEMENTATION(popupMenuLocalized, void)
++    {
++        const StringType::String* scope = NODE_ARG_OBJECT(2, StringType::String);
++        const std::string scopeName = scope ? scope->c_str() : "";
++        if (scopeName.empty() || scopeName.size() > 96
++            || scopeName.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-") != std::string::npos)
++        {
++            throwBadArgumentException(NODE_THIS, NODE_THREAD, "A localized popup scope must use 1-96 ASCII letters, digits, dots, underscores or hyphens");
++            return;
++        }
++        Session* session = Session::currentSession();
++        if (!session || !session->opaquePointer())
++        {
++            throwBadArgumentException(NODE_THIS, NODE_THREAD, "A localized popup requires an active session");
++            return;
++        }
++        RvDocument* document = static_cast<RvDocument*>(session->opaquePointer());
++        const QWidget* view = localizedPopupView(document, 0);
++        if (!view)
++            return;
++        const TwkApp::EventType::EventInstance* event = NODE_ARG_OBJECT(0, TwkApp::EventType::EventInstance);
++        DynamicArray* array = NODE_ARG_OBJECT(1, DynamicArray);
++        if (!array)
++        {
++            throwBadArgumentException(NODE_THIS, NODE_THREAD, "A localized popup requires a menu");
++            return;
++        }
++        QPoint location(0, view->height() - 1);
++        if (event)
++        {
++            if (const TwkApp::PointerEvent* pointer = dynamic_cast<const TwkApp::PointerEvent*>(event->event))
++                location = QPoint(pointer->x(), view->height() - pointer->y() - 1);
++        }
++        popupMenuInternal(array, location, "rv.localizedPopup." + scopeName);
++    }
++
+     NODE_IMPLEMENTATION(popupMenuAtPoint, void)
+     {
+         Session* s = Session::currentSession();
+diff --git a/src/lib/app/RvCommon/RvApplication.cpp b/src/lib/app/RvCommon/RvApplication.cpp
+index a08ce6113ed042644d430c60974a3f6d05cadecc..f76cf3bf71303266583d289125925d5c0d217593 100644
+--- a/src/lib/app/RvCommon/RvApplication.cpp
++++ b/src/lib/app/RvCommon/RvApplication.cpp
+@@ -8,6 +8,7 @@
+ 
+ #include <RvCommon/QTUtils.h>
+ #include <RvCommon/RvApplication.h>
++#include <RvCommon/RvLanguage.h>
+ #include <RvCommon/RvConsoleWindow.h>
+ #include <RvCommon/RvDocument.h>
+ #include <RvCommon/RvNetworkDialog.h>
+@@ -400,6 +401,7 @@ namespace Rv
+ 
+         qInstallMessageHandler(myMsgHandlerQT);
+         init();
++        initializeInterfaceLanguage();
+ 
+         pthread_mutex_init(&m_deleteLock, 0);
+         m_timer = new QTimer(this);
+diff --git a/src/lib/app/RvCommon/RvBottomViewToolBar.cpp b/src/lib/app/RvCommon/RvBottomViewToolBar.cpp
+index bf8f1a653f2d495c72b6106a0b06a79ec6a16143..ad18552877d6b7c188350b95c33a5d805cbdaf40 100644
+--- a/src/lib/app/RvCommon/RvBottomViewToolBar.cpp
++++ b/src/lib/app/RvCommon/RvBottomViewToolBar.cpp
+@@ -37,8 +37,6 @@ namespace Rv
+     using namespace boost;
+     using namespace TwkQtCoreUtil;
+ 
+-    static constexpr std::string_view playModeDefaultTooltip = "Select playback style";
+-
+     RvBottomViewToolBar::RvBottomViewToolBar(QWidget* parent)
+         : QToolBar("bottom", parent)
+         , EventNode("bottomToolBar")
+@@ -117,32 +115,32 @@ namespace Rv
+             case 0:
+                 b->setProperty("tbstyle", QVariant(QString("left")));
+                 a->setIcon(QIcon(":/images/smanager.png"));
+-                a->setToolTip("Toggle Session Manager");
++                a->setToolTip(tr("Toggle Session Manager"));
+                 m_smAction = a;
+                 break;
+             case 1:
+                 a->setIcon(QIcon(":/images/paint_48x48.png"));
+-                a->setToolTip("Toggle Annotation tools");
++                a->setToolTip(tr("Toggle Annotation tools"));
+                 m_paintAction = a;
+                 break;
+             case 2:
+                 a->setIcon(QIcon(":/images/about_48x48.png"));
+-                a->setToolTip("Toggle Image Info");
++                a->setToolTip(tr("Toggle Image Info"));
+                 m_infoAction = a;
+                 break;
+             case 3:
+                 a->setIcon(QIcon(":/images/ntwrk_48x48.png"));
+-                a->setToolTip("Toggle RV Networking Dialog");
++                a->setToolTip(tr("Toggle RV Networking Dialog"));
+                 m_networkAction = a;
+                 break;
+             case 4:
+                 a->setIcon(QIcon(":/images/timeline_mag.png"));
+-                a->setToolTip("Toggle Timeline Magnifier");
++                a->setToolTip(tr("Toggle Timeline Magnifier"));
+                 m_timelineMagAction = a;
+                 break;
+             case 5:
+                 a->setIcon(QIcon(":/images/timeline.png"));
+-                a->setToolTip("Toggle Timeline");
++                a->setToolTip(tr("Toggle Timeline"));
+                 b->setProperty("tbstyle", QVariant(QString("right")));
+                 m_timelineAction = a;
+                 break;
+@@ -158,7 +156,7 @@ namespace Rv
+ 
+         a = addAction("");
+         a->setIcon(QIcon(":/images/ghost.png"));
+-        a->setToolTip("Ghost");
++        a->setToolTip(tr("Ghost"));
+         a->setCheckable(true);
+         b = dynamic_cast<QToolButton*>(widgetForAction(a));
+         b->setProperty("tbstyle", QVariant(QString("left")));
+@@ -167,7 +165,7 @@ namespace Rv
+ 
+         a = addAction("");
+         a->setIcon(QIcon(":/images/hold.png"));
+-        a->setToolTip("Hold");
++        a->setToolTip(tr("Hold"));
+         a->setCheckable(true);
+         b = dynamic_cast<QToolButton*>(widgetForAction(a));
+         b->setProperty("tbstyle", QVariant(QString("right")));
+@@ -190,7 +188,7 @@ namespace Rv
+         // play buts
+         a = addAction("");
+         a->setIcon(QIcon(":/images/control_bstep.png"));
+-        a->setToolTip("Step back one frame");
++        a->setToolTip(tr("Step back one frame"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(a));
+         b->setProperty("tbstyle", QVariant(QString("left")));
+         b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+@@ -199,7 +197,7 @@ namespace Rv
+ 
+         a = addAction("");
+         a->setIcon(QIcon(":/images/control_fstep.png"));
+-        a->setToolTip("Step forward one frame");
++        a->setToolTip(tr("Step forward one frame"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(a));
+         b->setProperty("tbstyle", QVariant(QString("right")));
+         b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+@@ -208,7 +206,7 @@ namespace Rv
+ 
+         a = addAction("");
+         a->setIcon(QIcon(":/images/control_bplay.png"));
+-        a->setToolTip("Play backwards");
++        a->setToolTip(tr("Play backwards"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(a));
+         b->setProperty("tbstyle", QVariant(QString("left")));
+         b->setProperty("tbsize", QVariant(QString("double")));
+@@ -217,7 +215,7 @@ namespace Rv
+ 
+         a = addAction("");
+         a->setIcon(QIcon(":/images/control_play.png"));
+-        a->setToolTip("Play forwards");
++        a->setToolTip(tr("Play forwards"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(a));
+         b->setProperty("tbstyle", QVariant(QString("right")));
+         b->setProperty("tbsize", QVariant(QString("double")));
+@@ -226,7 +224,7 @@ namespace Rv
+ 
+         a = addAction("");
+         a->setIcon(QIcon(":/images/control_bmark.png"));
+-        a->setToolTip("Skip to start of sequence");
++        a->setToolTip(tr("Skip to start of sequence"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(a));
+         b->setProperty("tbstyle", QVariant(QString("left")));
+         b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+@@ -235,7 +233,7 @@ namespace Rv
+ 
+         a = addAction("");
+         a->setIcon(QIcon(":/images/control_fmark.png"));
+-        a->setToolTip("Skip to end of sequence");
++        a->setToolTip(tr("Skip to end of sequence"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(a));
+         b->setProperty("tbstyle", QVariant(QString("right")));
+         b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+@@ -273,7 +271,8 @@ namespace Rv
+         addWidget(qf);
+ 
+         m_playModeAction = addAction("");
+-        m_playModeAction->setToolTip(QString::fromUtf8(playModeDefaultTooltip.data(), playModeDefaultTooltip.size()));
++        m_playModeAction->setObjectName("rvPlaybackStyleAction");
++        m_playModeAction->setToolTip(tr("Select playback style"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(m_playModeAction));
+ 
+         switch (static_cast<Session::PlayMode>(opts.loopMode))
+@@ -297,12 +296,12 @@ namespace Rv
+         b->setPopupMode(QToolButton::InstantPopup);
+ 
+         m_playModeMenu = new QMenu(b);
+-        m_playModeMenu->addAction("Playback")->setDisabled(true);
+-        m_playModeOnceAction = m_playModeMenu->addAction("  Once");
++        m_playModeMenu->addAction(tr("Playback"))->setDisabled(true);
++        m_playModeOnceAction = m_playModeMenu->addAction(tr("  Once"));
+         m_playModeOnceAction->setData(enumCodeMap(Session::PlayOnce, "commands.setPlayMode(PlayOnce)"));
+-        m_playModeLoopAction = m_playModeMenu->addAction("  Loop");
++        m_playModeLoopAction = m_playModeMenu->addAction(tr("  Loop"));
+         m_playModeLoopAction->setData(enumCodeMap(Session::PlayLoop, "commands.setPlayMode(PlayLoop)"));
+-        m_playModePingPongAction = m_playModeMenu->addAction("  PingPong");
++        m_playModePingPongAction = m_playModeMenu->addAction(tr("  PingPong"));
+         m_playModePingPongAction->setData(enumCodeMap(Session::PlayPingPong, "commands.setPlayMode(PlayPingPong)"));
+         //  m_playModeMenu->addAction("  Loop with Black 0.5 Second");
+         //  m_playModeMenu->addAction("  Loop with Black 1.0 Second");
+@@ -317,7 +316,7 @@ namespace Rv
+ 
+         int volumeLevel = (int)(100.0f * IPCore::SoundTrackIPNode::defaultVolume);
+         m_audioAction = addAction("");
+-        m_audioAction->setToolTip("Audio control");
++        m_audioAction->setToolTip(tr("Audio control"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(m_audioAction));
+         setVolumeLevel<QToolButton>(*b, volumeLevel);
+         b->setProperty("tbstyle", QVariant(QString("right_menu")));
+@@ -325,7 +324,7 @@ namespace Rv
+         b->setPopupMode(QToolButton::InstantPopup);
+         m = new QMenu(b);
+         m->setProperty("menuStyle", QVariant(QString("slim")));
+-        QAction* audio = m->addAction("Volume");
++        QAction* audio = m->addAction(tr("Volume"));
+         audio->setDisabled(true);
+         QWidgetAction* wa = new QWidgetAction(b);
+         setVolumeLevel<QWidgetAction>(*wa, volumeLevel);
+@@ -335,7 +334,7 @@ namespace Rv
+         wa->setDefaultWidget(m_audioSlider);
+         m->addAction(wa);
+         m->addSeparator();
+-        m_muteAction = m->addAction("Mute");
++        m_muteAction = m->addAction(tr("Mute"));
+         m_muteAction->setIcon(QIcon(":/images/mute_32x32.png"));
+         m_muteAction->setCheckable(true);
+         b->setMenu(m);
+@@ -659,7 +658,7 @@ namespace Rv
+         }
+         else if (!loopEnabled && !m_customDisabledPrefix.isEmpty())
+         {
+-            m_playModeLoopAction->setToolTip(m_customDisabledPrefix + "Loop");
++            m_playModeLoopAction->setToolTip(m_customDisabledPrefix + tr("Loop"));
+         }
+         else
+         {
+@@ -673,7 +672,7 @@ namespace Rv
+         }
+         else if (!onceEnabled && !m_customDisabledPrefix.isEmpty())
+         {
+-            m_playModeOnceAction->setToolTip(m_customDisabledPrefix + "Once");
++            m_playModeOnceAction->setToolTip(m_customDisabledPrefix + tr("Once"));
+         }
+         else
+         {
+@@ -687,7 +686,7 @@ namespace Rv
+         }
+         else if (!pingPongEnabled && !m_customDisabledPrefix.isEmpty())
+         {
+-            m_playModePingPongAction->setToolTip(m_customDisabledPrefix + "PingPong");
++            m_playModePingPongAction->setToolTip(m_customDisabledPrefix + tr("PingPong"));
+         }
+         else
+         {
+@@ -701,7 +700,7 @@ namespace Rv
+         QString tooltip;
+         if (anyEnabled)
+         {
+-            tooltip = QString::fromUtf8(playModeDefaultTooltip.data(), playModeDefaultTooltip.size());
++            tooltip = tr("Select playback style");
+         }
+         else
+         {
+@@ -711,11 +710,11 @@ namespace Rv
+             }
+             else if (!m_customDisabledPrefix.isEmpty())
+             {
+-                tooltip = m_customDisabledPrefix + QString::fromUtf8(playModeDefaultTooltip.data(), playModeDefaultTooltip.size());
++                tooltip = m_customDisabledPrefix + tr("Select playback style");
+             }
+             else
+             {
+-                tooltip = QString::fromUtf8(playModeDefaultTooltip.data(), playModeDefaultTooltip.size());
++                tooltip = tr("Select playback style");
+             }
+         }
+         m_playModeAction->setToolTip(tooltip);
+diff --git a/src/lib/app/RvCommon/RvCommon/MuUICommands.h b/src/lib/app/RvCommon/RvCommon/MuUICommands.h
+index e0665957bc0477ef14e7cfdbd75022e6b5f8311d..8842103ad83b30e98759026e9ca1094ee5d9d34d 100644
+--- a/src/lib/app/RvCommon/RvCommon/MuUICommands.h
++++ b/src/lib/app/RvCommon/RvCommon/MuUICommands.h
+@@ -21,6 +21,7 @@ namespace Rv
+     NODE_DECLARATION(setViewSize, void);
+     NODE_DECLARATION(startupResize, bool);
+     NODE_DECLARATION(popupMenu, void);
++    NODE_DECLARATION(popupMenuLocalized, void);
+     NODE_DECLARATION(popupMenuAtPoint, void);
+     NODE_DECLARATION(setWindowTitle, void);
+     NODE_DECLARATION(center, void);
+diff --git a/src/lib/app/RvCommon/RvDocument.cpp b/src/lib/app/RvCommon/RvDocument.cpp
+index 82952ead891234561d015577b81b6ea22f3384a2..24aeba81754e72751013da4bf1afe01ccaed79d7 100644
+--- a/src/lib/app/RvCommon/RvDocument.cpp
++++ b/src/lib/app/RvCommon/RvDocument.cpp
+@@ -8,6 +8,8 @@
+ 
+ #include <RvCommon/RvDocument.h>
+ #include <RvCommon/RvApplication.h>
++#include <RvCommon/RvLanguage.h>
++#include <RvCommon/RvUpdateChecker.h>
+ #include <RvCommon/RvPreferences.h>
+ #include <RvCommon/RvProfileManager.h>
+ #include <RvCommon/RvSourceEditor.h>
+@@ -2416,13 +2418,26 @@ namespace Rv
+ 
+     void RvDocument::convert(QMenu* qmenu, const TwkApp::Menu* menu, bool shortcuts)
+     {
++        const QVariant sourcePath = qmenu->property("rvSourceMenuPath");
++        const QStringList parentPath = sourcePath.toStringList();
++        const auto displayText = [&sourcePath, &parentPath](const std::string& title) {
++            const QString source = utf8(title);
++            return sourcePath.isValid() ? translateMenuText(source, parentPath) : source;
++        };
+         for (int i = 0; i < menu->items().size(); i++)
+         {
+             const TwkApp::Menu::Item* item = menu->items()[i];
+ 
+             if (item->subMenu())
+             {
+-                QMenu* subMenu = qmenu->addMenu(utf8(item->title()));
++                QMenu* subMenu = qmenu->addMenu(displayText(item->title()));
++                if (sourcePath.isValid())
++                {
++                    QStringList path = parentPath;
++                    path.append(utf8(item->title()));
++                    subMenu->setProperty("rvSourceMenuPath", path);
++                }
++                subMenu->menuAction()->setProperty("rvSourceText", utf8(item->title()));
+                 subMenu->setFont(qmenu->font());
+                 //  rt.go();
+                 connect(subMenu, SIGNAL(aboutToShow()), this, SLOT(aboutToShowMenu()));
+@@ -2437,16 +2452,18 @@ namespace Rv
+             else
+             {
+                 TwkQTAction* a = new TwkQTAction(item, this, qmenu);
++                a->setProperty("rvSourceText", utf8(item->title()));
++                a->setProperty("rvSourceMenuPath", parentPath);
+ 
+                 if ((item->stateFunc() && item->stateFunc()->error()) || (item->action() && item->action()->error()))
+                 {
+-                    a->setText(QString("ERROR : ") + utf8(item->title()));
++                    a->setText(QString("ERROR : ") + displayText(item->title()));
+                     a->setIcon(colorAdjustedIcon(":images/del_32x32.png"));
+                     a->setEnabled(false);
+                 }
+                 else
+                 {
+-                    a->setText(utf8(item->title()));
++                    a->setText(displayText(item->title()));
+                 }
+ 
+                 if (shortcuts)
+@@ -2483,6 +2500,10 @@ namespace Rv
+ 
+             if (QMenu* m = a->menu())
+             {
++                // This parent-owned menu is reused after menu-bar rebuilds.
++                // Preserve its QActionGroup forwarding and language callbacks.
++                if (m->objectName() == "rvInterfaceLanguageMenu")
++                    continue;
+                 disconnectActions(m->actions());
+                 m->disconnect();
+             }
+@@ -2589,15 +2610,21 @@ namespace Rv
+ 
+             if (item->subMenu())
+             {
+-                QString title = utf8(item->title());
++                const QString sourceTitle = utf8(item->title());
++                const QString title = translateMenuText(sourceTitle);
++                const QStringList sourcePath{sourceTitle};
+ 
+                 QMenu* menu = mb()->addMenu(title);
++                menu->setProperty("rvSourceMenuPath", sourcePath);
++                menu->menuAction()->setProperty("rvSourceText", sourceTitle);
+                 //  rt.go();
+                 connect(menu, SIGNAL(aboutToShow()), this, SLOT(aboutToShowMenu()));
+                 //  rt.stop();
+                 convert(menu, item->subMenu(), shortcuts);
+ 
+                 QMenu* pmenu = m_mainPopup->addMenu(title);
++                pmenu->setProperty("rvSourceMenuPath", sourcePath);
++                pmenu->menuAction()->setProperty("rvSourceText", sourceTitle);
+ #ifdef PLATFORM_DARWIN
+                 pmenu->setFont(f);
+ #endif
+@@ -2605,8 +2632,14 @@ namespace Rv
+                 connect(pmenu, SIGNAL(aboutToShow()), this, SLOT(aboutToShowMenu()));
+                 //  rt.stop();
+                 convert(pmenu, item->subMenu(), shortcuts);
++                if (sourceTitle == QStringLiteral("Help"))
++                {
++                    addUpdateCheckAction(menu, this);
++                    addUpdateCheckAction(pmenu, this);
++                }
+             }
+         }
++        mb()->addMenu(createInterfaceLanguageMenu(mb()));
+         //  cerr << "    total connect calls: " << rt.total() << " seconds" <<
+         //  endl;
+     }
+@@ -2633,6 +2666,15 @@ namespace Rv
+             m_userPopup = new QMenu(this);
+ 
+         m_userPopup->setObjectName("User Popup");
++        // A tagged popup uses the same generated full-path opt-in as ordinary
++        // menus. Item titles and callbacks stay unchanged. Clear the old scope
++        // whenever this QMenu is reused for an ordinary user-defined popup.
++        const QString popupName = utf8(menu->name());
++        const QString localizedPrefix = QStringLiteral("rv.localizedPopup.");
++        const QString scope = popupName.startsWith(localizedPrefix) ? popupName.mid(localizedPrefix.size()) : QString();
++        m_userPopup->setProperty("rvLocalizedPopupScope", scope);
++        m_userPopup->setProperty("rvSourceMenuPath", scope.isEmpty() ? QVariant()
++                                    : QVariant(QStringList{QStringLiteral("@popup"), scope}));
+ 
+ #ifdef PLATFORM_DARWIN
+         QFont f = m_userPopup->font();
+diff --git a/src/lib/app/RvCommon/RvFileDialog.cpp b/src/lib/app/RvCommon/RvFileDialog.cpp
+index ff1a7bcff301eb46c032af8a635fc93a503cda1a..560cafb33e4b56181c61fa0a6c5840c1bbe635e4 100644
+--- a/src/lib/app/RvCommon/RvFileDialog.cpp
++++ b/src/lib/app/RvCommon/RvFileDialog.cpp
+@@ -178,7 +178,7 @@ namespace Rv
+         m_allowAutoRefresh = settings.value("allowAutoRefresh", false).toBool();
+         m_ui.autoRefreshCheckbox->setCheckState((m_allowAutoRefresh) ? Qt::Checked : Qt::Unchecked);
+ 
+-        setWindowTitle("Select Files/Directories");
++        setWindowTitle(tr("Select Files/Directories"));
+         setSizeGripEnabled(true);
+         m_reloadTimer = new QTimer(this);
+         m_sidePanelTimer = new QTimer(this);
+@@ -197,17 +197,17 @@ namespace Rv
+             delete w;
+ 
+         m_sidePanelPopup = new QMenu(this);
+-        QAction* spGo = m_sidePanelPopup->addAction("Go to Location");
+-        QAction* spUse = m_sidePanelPopup->addAction("Use Selection");
++        QAction* spGo = m_sidePanelPopup->addAction(tr("Go to Location"));
++        QAction* spUse = m_sidePanelPopup->addAction(tr("Use Selection"));
+         m_sidePanelPopup->addSeparator();
+-        QAction* spRemove = m_sidePanelPopup->addAction("Remove Item from Panel");
++        QAction* spRemove = m_sidePanelPopup->addAction(tr("Remove Item from Panel"));
+ 
+         m_configPopup = new QMenu(this);
+-        m_cpSystem = m_configPopup->addAction("System Icons");
+-        m_cpGeneric = m_configPopup->addAction("Generic Icons");
+-        m_cpNone = m_configPopup->addAction("No Icons");
++        m_cpSystem = m_configPopup->addAction(tr("System Icons"));
++        m_cpGeneric = m_configPopup->addAction(tr("Generic Icons"));
++        m_cpNone = m_configPopup->addAction(tr("No Icons"));
+         m_configPopup->addSeparator();
+-        m_cpHidden = m_configPopup->addAction("Show Hidden Files");
++        m_cpHidden = m_configPopup->addAction(tr("Show Hidden Files"));
+         m_cpSystem->setCheckable(true);
+         m_cpGeneric->setCheckable(true);
+         m_cpNone->setCheckable(true);
+@@ -220,12 +220,12 @@ namespace Rv
+         m_ui.configButton->setMenu(m_configPopup);
+ 
+         m_selectionPopup = new QMenu(this);
+-        m_createDirectory = m_selectionPopup->addAction("New Folder");
++        m_createDirectory = m_selectionPopup->addAction(tr("New Folder"));
+         m_selectionPopup->addSeparator();
+-        m_rename = m_selectionPopup->addAction("Rename");
+-        m_delete = m_selectionPopup->addAction("Delete");
++        m_rename = m_selectionPopup->addAction(tr("Rename"));
++        m_delete = m_selectionPopup->addAction(tr("Delete"));
+         m_selectionPopup->addSeparator();
+-        m_reload = m_selectionPopup->addAction("Refresh");
++        m_reload = m_selectionPopup->addAction(tr("Refresh"));
+ 
+         QIcon backIcon = colorAdjustedIcon(":images/back_32x32.png");
+         QIcon forwardIcon = colorAdjustedIcon(":images/forwd_32x32.png");
+@@ -613,7 +613,7 @@ namespace Rv
+         //
+         QListWidgetItem* item = newItemForFile(QFileInfo(QDir::current().path()));
+         item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+-        item->setText("Current Directory");
++        item->setText(tr("Current Directory"));
+         l->addItem(item);
+ 
+         QFileInfoList mounts = findMountPoints();
+@@ -648,13 +648,13 @@ namespace Rv
+ 
+         if (m_currentDir.isEmpty() || !dir.exists())
+         {
+-            QMessageBox::critical(this, "Create New Folder Error", QString("Current Directory does not exist: %1").arg(m_currentDir));
++            QMessageBox::critical(this, tr("Create New Folder Error"), tr("Current Directory does not exist: %1").arg(m_currentDir));
+ 
+             return;
+         }
+ 
+         QString folderName =
+-            QInputDialog::getText(this, "Create New Folder", "Folder name:", QLineEdit::Normal, QString("untitled folder"), &ok);
++            QInputDialog::getText(this, tr("Create New Folder"), tr("Folder name:"), QLineEdit::Normal, QString("untitled folder"), &ok);
+ 
+         if (ok && !folderName.isEmpty())
+         {
+@@ -664,9 +664,9 @@ namespace Rv
+             }
+             else
+             {
+-                QMessageBox::critical(this, "Create New Folder Error",
+-                                      "Failed to create the folder.\n"
+-                                      "It may already exist or the name is invalid.");
++                QMessageBox::critical(this, tr("Create New Folder Error"),
++                                      tr("Failed to create the folder.\n"
++                                      "It may already exist or the name is invalid."));
+             }
+         }
+     }
+@@ -676,16 +676,16 @@ namespace Rv
+         QStringList files = selectedFiles();
+         if (files.size() == 0)
+         {
+-            QMessageBox::critical(this, "Rename Error",
+-                                  "No folder or file selected.\n"
+-                                  "Please select only one file or folder.");
++            QMessageBox::critical(this, tr("Rename Error"),
++                                  tr("No folder or file selected.\n"
++                                  "Please select only one file or folder."));
+             return;
+         }
+         else if (files.size() > 1)
+         {
+-            QMessageBox::critical(this, "Rename Error",
+-                                  "Too many folders and files selected.\n"
+-                                  "Please select only one file or folder.");
++            QMessageBox::critical(this, tr("Rename Error"),
++                                  tr("Too many folders and files selected.\n"
++                                  "Please select only one file or folder."));
+             return;
+         }
+ 
+@@ -694,12 +694,12 @@ namespace Rv
+ 
+         if (!info.exists())
+         {
+-            QMessageBox::critical(this, "Rename Error", QString("Unable to rename: %1").arg(info.fileName()));
++            QMessageBox::critical(this, tr("Rename Error"), tr("Unable to rename: %1").arg(info.fileName()));
+             return;
+         }
+ 
+         bool ok;
+-        QString newName = QInputDialog::getText(this, "Rename", "New name:", QLineEdit::Normal, info.fileName(), &ok);
++        QString newName = QInputDialog::getText(this, tr("Rename"), tr("New name:"), QLineEdit::Normal, info.fileName(), &ok);
+ 
+         if (!ok || newName.isEmpty() || newName == info.fileName())
+             return;
+@@ -715,16 +715,16 @@ namespace Rv
+         }
+         else
+         {
+-            QMessageBox::critical(this, "Error",
+-                                  QString("Failed to rename the %1.\nIt may already exist or you may not have permission.")
+-                                      .arg(info.isDir() ? "folder" : "file"));
++            QMessageBox::critical(this, tr("Error"),
++                                  tr("Failed to rename the %1.\nIt may already exist or you may not have permission.")
++                                      .arg(info.isDir() ? tr("folder") : tr("file")));
+         }
+     }
+ 
+     bool RvFileDialog::confirmDeleteDialog(const QStringList& paths)
+     {
+         QDialog dialog(this);
+-        dialog.setWindowTitle("Confirm Deletion");
++        dialog.setWindowTitle(tr("Confirm Deletion"));
+ 
+         QVBoxLayout* layout = new QVBoxLayout(&dialog);
+ 
+@@ -734,7 +734,7 @@ namespace Rv
+         iconLabel->setPixmap(icon.pixmap(48, 48));
+         messageLayout->addWidget(iconLabel, 0, Qt::AlignTop);
+ 
+-        QLabel* label = new QLabel("Are you sure you want to delete the following paths?");
++        QLabel* label = new QLabel(tr("Are you sure you want to delete the following paths?"));
+         messageLayout->addWidget(label, 1);
+ 
+         layout->addLayout(messageLayout);
+@@ -759,9 +759,9 @@ namespace Rv
+         QStringList paths = selectedFiles();
+         if (paths.size() == 0)
+         {
+-            QMessageBox::critical(this, "Delete Error",
+-                                  "No items selected.\n"
+-                                  "You must have one or more files selected");
++            QMessageBox::critical(this, tr("Delete Error"),
++                                  tr("No items selected.\n"
++                                     "You must have one or more files selected"));
+             return;
+         }
+ 
+@@ -774,7 +774,7 @@ namespace Rv
+             QFileInfo info(path);
+             if (!info.exists() || !(info.isFile() || info.isDir()))
+             {
+-                QMessageBox::critical(this, "Delete Error", QString("Unable to delete: %1").arg(info.fileName()));
++                QMessageBox::critical(this, tr("Delete Error"), tr("Unable to delete: %1").arg(info.fileName()));
+                 return;
+             }
+ 
+@@ -798,7 +798,7 @@ namespace Rv
+             QFileInfo info(path);
+             if (!info.exists())
+             {
+-                QMessageBox::critical(this, "Delete Error", QString("Path does not exist: %1").arg(path));
++                QMessageBox::critical(this, tr("Delete Error"), tr("Path does not exist: %1").arg(path));
+                 return;
+             }
+ 
+@@ -806,7 +806,7 @@ namespace Rv
+             {
+                 if (!QFile::remove(path))
+                 {
+-                    QMessageBox::critical(this, "Delete Error", QString("Failed to delete file: %1").arg(path));
++                    QMessageBox::critical(this, tr("Delete Error"), tr("Failed to delete file: %1").arg(path));
+                     return;
+                 }
+             }
+@@ -815,13 +815,13 @@ namespace Rv
+                 QDir dir(path);
+                 if (!dir.removeRecursively())
+                 {
+-                    QMessageBox::critical(this, "Delete Error", QString("Failed to delete directory: %1").arg(path));
++                    QMessageBox::critical(this, tr("Delete Error"), tr("Failed to delete directory: %1").arg(path));
+                     return;
+                 }
+             }
+             else
+             {
+-                QMessageBox::critical(this, "Delete Error", QString("Unknown path type: %1").arg(path));
++                QMessageBox::critical(this, tr("Delete Error"), tr("Unknown path type: %1").arg(path));
+                 return;
+             }
+         }
+@@ -1006,7 +1006,7 @@ namespace Rv
+         DB("    adding Recent items");
+ 
+         m_ui.pathCombo->insertSeparator(m_ui.pathCombo->count());
+-        m_ui.pathCombo->addItem("     Recent");
++        m_ui.pathCombo->addItem(tr("     Recent"));
+         m_ui.pathCombo->insertSeparator(m_ui.pathCombo->count());
+ 
+         if (m_visited.contains(absoluteDirPath))
+diff --git a/src/lib/app/RvCommon/RvNetworkDialog.cpp b/src/lib/app/RvCommon/RvNetworkDialog.cpp
+index bc882e01d6a8bb65dc106ced28d9873c95879640..bea7c57eb12a2b753dc7dbd56c68ac03cb920965 100644
+--- a/src/lib/app/RvCommon/RvNetworkDialog.cpp
++++ b/src/lib/app/RvCommon/RvNetworkDialog.cpp
+@@ -65,16 +65,16 @@ namespace Rv
+         m_ui.setupUi(this);
+ 
+         m_connectUI.setupUi(&m_connectDialog);
+-        m_connectUI.buttonBox->button(QDialogButtonBox::Ok)->setText("Connect");
++        m_connectUI.buttonBox->button(QDialogButtonBox::Ok)->setText(tr("Connect"));
+ 
+-        m_contactPopup = new QMenu("Selection", 0);
++        m_contactPopup = new QMenu(tr("Selection"), 0);
+         QAction* mtitle = m_contactPopup->addAction("");
+         QAction* msep = m_contactPopup->addSeparator();
+-        QAction* mconnect = m_contactPopup->addAction("Connect...");
+-        QAction* mdisconnect = m_contactPopup->addAction("Disconnect...");
+-        QAction* mdelete = m_contactPopup->addAction("Delete");
++        QAction* mconnect = m_contactPopup->addAction(tr("Connect..."));
++        QAction* mdisconnect = m_contactPopup->addAction(tr("Disconnect..."));
++        QAction* mdelete = m_contactPopup->addAction(tr("Delete"));
+ 
+-        m_ui.statusLabel->setText("<b>Not Running</b>");
++        m_ui.statusLabel->setText(tr("<b>Not Running</b>"));
+         m_contactsModel = new QStandardItemModel();
+         m_ui.contactTreeView->setModel(m_contactsModel);
+         m_ui.contactTreeView->setItemDelegate(new PermDelegate());
+@@ -179,12 +179,12 @@ namespace Rv
+         QList<QString> keys = contacts.keys();
+         m_contactsModel->clear();
+         QStringList headers;
+-        headers.push_back("Connected");
+-        headers.push_back("Name   ");
+-        headers.push_back("Machine");
+-        headers.push_back("Permission");
+-        headers.push_back("App    ");
+-        headers.push_back("Session");
++        headers.push_back(tr("Connected"));
++        headers.push_back(tr("Name   "));
++        headers.push_back(tr("Machine"));
++        headers.push_back(tr("Permission"));
++        headers.push_back(tr("App    "));
++        headers.push_back(tr("Session"));
+         m_contactsModel->setHorizontalHeaderLabels(headers);
+ 
+         for (int i = 0; i < keys.size(); i++)
+@@ -202,11 +202,11 @@ namespace Rv
+ 
+     bool RvNetworkDialog::confirmDisconnect(const QString& contact)
+     {
+-        QMessageBox box(QMessageBox::Warning, "Disconnect", QString("Disconnect from %1?").arg(contact), QMessageBox::NoButton, this,
++        QMessageBox box(QMessageBox::Warning, tr("Disconnect"), tr("Disconnect from %1?").arg(contact), QMessageBox::NoButton, this,
+                         Qt::Sheet);
+ 
+-        QPushButton* q1 = box.addButton("Disconnect", QMessageBox::AcceptRole);
+-        QPushButton* q2 = box.addButton("Cancel", QMessageBox::RejectRole);
++        QPushButton* q1 = box.addButton(tr("Disconnect"), QMessageBox::AcceptRole);
++        QPushButton* q2 = box.addButton(tr("Cancel"), QMessageBox::RejectRole);
+         box.setIcon(QMessageBox::Question);
+         box.exec();
+         return box.clickedButton() == q1;
+@@ -214,11 +214,11 @@ namespace Rv
+ 
+     void RvNetworkDialog::resetConfig()
+     {
+-        QMessageBox box(QMessageBox::Warning, "Reset Network Configuration", "Reset Network Configuration Settings?", QMessageBox::NoButton,
++        QMessageBox box(QMessageBox::Warning, tr("Reset Network Configuration"), tr("Reset Network Configuration Settings?"), QMessageBox::NoButton,
+                         this, Qt::Sheet);
+ 
+-        QPushButton* q1 = box.addButton("Reset", QMessageBox::AcceptRole);
+-        QPushButton* q2 = box.addButton("Cancel", QMessageBox::RejectRole);
++        QPushButton* q1 = box.addButton(tr("Reset"), QMessageBox::AcceptRole);
++        QPushButton* q2 = box.addButton(tr("Cancel"), QMessageBox::RejectRole);
+         box.setIcon(QMessageBox::Warning);
+         box.exec();
+ 
+@@ -455,12 +455,12 @@ namespace Rv
+ 
+             if (n > 0 && docs.size())
+             {
+-                QMessageBox box(QMessageBox::Warning, "Stop Network",
+-                                QString("%1 connection%2 %3 still active").arg(n).arg(n == 1 ? "" : "s").arg(n == 1 ? "is" : "are"),
++                QMessageBox box(QMessageBox::Warning, tr("Stop Network"),
++                                tr("Active connections: %1").arg(n),
+                                 QMessageBox::NoButton, this, Qt::Sheet);
+ 
+-                QPushButton* q1 = box.addButton("Stop Network", QMessageBox::AcceptRole);
+-                QPushButton* q2 = box.addButton("Cancel", QMessageBox::RejectRole);
++                QPushButton* q1 = box.addButton(tr("Stop Network"), QMessageBox::AcceptRole);
++                QPushButton* q2 = box.addButton(tr("Cancel"), QMessageBox::RejectRole);
+                 box.setIcon(QMessageBox::Warning);
+                 box.exec();
+                 if (box.clickedButton() == q2)
+@@ -654,12 +654,12 @@ namespace Rv
+ 
+         if (perm == AskConnect)
+         {
+-            QMessageBox box(QMessageBox::Warning, "Connection Request", QString("%1 wants to connect\n ").arg(name), QMessageBox::NoButton,
++            QMessageBox box(QMessageBox::Warning, tr("Connection Request"), tr("%1 wants to connect\n ").arg(name), QMessageBox::NoButton,
+                             this, Qt::Dialog);
+ 
+-            QPushButton* q3 = box.addButton("Always Allow", QMessageBox::AcceptRole);
+-            QPushButton* q1 = box.addButton("Allow Once", QMessageBox::ApplyRole);
+-            QPushButton* q2 = box.addButton("Deny", QMessageBox::RejectRole);
++            QPushButton* q3 = box.addButton(tr("Always Allow"), QMessageBox::AcceptRole);
++            QPushButton* q1 = box.addButton(tr("Allow Once"), QMessageBox::ApplyRole);
++            QPushButton* q2 = box.addButton(tr("Deny"), QMessageBox::RejectRole);
+             box.exec();
+ 
+             if (box.clickedButton() == q2)
+@@ -735,17 +735,17 @@ namespace Rv
+         if (m_client)
+         {
+             int n = m_ui.participantList->count();
+-            QString t = QString("<big><b>Running</b></big><br>%1 Connection%2").arg(n).arg(n == 1 ? "" : "s");
++            QString t = tr("<big><b>Running</b></big><br>Connections: %1").arg(n);
+             m_ui.statusLabel->setText(t);
+-            m_ui.startButton->setText("Stop Network");
++            m_ui.startButton->setText(tr("Stop Network"));
+             m_ui.nameLineEdit->setDisabled(true);
+             m_ui.portLineEdit->setDisabled(true);
+             m_ui.resetConfigButton->setDisabled(true);
+         }
+         else
+         {
+-            m_ui.statusLabel->setText("Not Running");
+-            m_ui.startButton->setText("Start Network");
++            m_ui.statusLabel->setText(tr("Not Running"));
++            m_ui.startButton->setText(tr("Start Network"));
+             m_ui.nameLineEdit->setDisabled(false);
+             m_ui.portLineEdit->setDisabled(false);
+             m_ui.resetConfigButton->setDisabled(false);
+@@ -854,7 +854,7 @@ namespace Rv
+             }
+             else
+             {
+-                QMessageBox::critical(this, "Unknown Host Name", QString("Could not resolve host name %1").arg(qhost));
++                QMessageBox::critical(this, tr("Unknown Host Name"), tr("Could not resolve host name %1").arg(qhost));
+             }
+         }
+     }
+@@ -903,7 +903,7 @@ namespace Rv
+                 }
+                 else
+                 {
+-                    QMessageBox::critical(this, "Unknown Host Name", QString("Could not resolve host name %1").arg(hname));
++                    QMessageBox::critical(this, tr("Unknown Host Name"), tr("Could not resolve host name %1").arg(hname));
+                 }
+             }
+         }
+@@ -1073,11 +1073,11 @@ namespace Rv
+         {
+             if (contact == "" || contact[0] == '@')
+             {
+-                QMessageBox::critical(this, "Network Error", QString("Connection to %1:\n%2").arg(machine).arg(msg));
++                QMessageBox::critical(this, tr("Network Error"), tr("Connection to %1:\n%2").arg(machine).arg(msg));
+             }
+             else
+             {
+-                QMessageBox::critical(this, "Network Error", QString("Connection to %1:\n%3").arg(contact).arg(msg));
++                QMessageBox::critical(this, tr("Network Error"), tr("Connection to %1:\n%3").arg(contact).arg(msg));
+             }
+         }
+ 
+diff --git a/src/lib/app/RvCommon/RvPreferences.cpp b/src/lib/app/RvCommon/RvPreferences.cpp
+index cf035df1704c835bd74331874badbdd1df226319..eb9a354bce2ab530832cc4fee9237d4629e2aa9f 100644
+--- a/src/lib/app/RvCommon/RvPreferences.cpp
++++ b/src/lib/app/RvCommon/RvPreferences.cpp
+@@ -127,7 +127,7 @@ namespace Rv
+         m_ui.setupUi(this);
+         connect(m_ui.exrAutoThreadsToggle, SIGNAL(stateChanged(int)), this, SLOT(exrAutoThreads(int)));
+         connect(m_ui.exrNumThreadsEdit, SIGNAL(textChanged(const QString&)), this, SLOT(exrThreadNumChanged(const QString&)));
+-        setWindowTitle(UI_APPLICATION_NAME " Preferences");
++        setWindowTitle(tr("%1 Preferences").arg(UI_APPLICATION_NAME));
+ 
+         // Auxiliary window: never keeps RV alive.
+         setAttribute(Qt::WA_QuitOnClose, false);
+@@ -409,12 +409,12 @@ namespace Rv
+         m_ui.useCrashReporterToggle->setDisabled(true);
+ 
+         m_ui.startupScreenCombo->clear();
+-        m_ui.startupScreenCombo->addItem("Follow Pointer");
++        m_ui.startupScreenCombo->addItem(tr("Follow Pointer"));
+ 
+         const QList<QScreen*> screens = QGuiApplication::screens();
+         for (int i = 0; i < screens.size(); i++)
+         {
+-            m_ui.startupScreenCombo->addItem(QString("Screen %1").arg((unsigned int)(i)));
++            m_ui.startupScreenCombo->addItem(tr("Screen %1").arg((unsigned int)(i)));
+         }
+         m_ui.startupScreenCombo->setCurrentIndex((opts.screen < m_ui.startupScreenCombo->count() - 1) ? opts.screen + 1 : 0);
+ 
+@@ -561,7 +561,7 @@ namespace Rv
+             m_ui.audioDeviceLayoutCombo->clear();
+             m_ui.audioDeviceFormatCombo->clear();
+             m_ui.audioDeviceRateWidget->clear();
+-            m_ui.audioModuleCombo->addItem("Audio Disabled");
++            m_ui.audioModuleCombo->addItem(tr("Audio Disabled"));
+             m_ui.audioModuleCombo->setItemIcon(0, colorAdjustedIcon(":images/mute_32x32.png"));
+             m_ui.audioDeviceCombo->setEnabled(false);
+             m_ui.audioDeviceLayoutCombo->setEnabled(false);
+@@ -3567,13 +3567,13 @@ namespace Rv
+             switch (i)
+             {
+             case 0:
+-                combos[i]->addItem("- Use Default Profile -");
++                combos[i]->addItem(tr("- Use Default Profile -"));
+                 break;
+             case 1:
+-                combos[i]->addItem("- Use Module Profile -");
++                combos[i]->addItem(tr("- Use Module Profile -"));
+                 break;
+             case 2:
+-                combos[i]->addItem("- Use Device Profile -");
++                combos[i]->addItem(tr("- Use Device Profile -"));
+                 break;
+             }
+         }
+diff --git a/src/lib/app/RvCommon/RvProfileManager.cpp b/src/lib/app/RvCommon/RvProfileManager.cpp
+index 6fd0a8b4c021abb51c4b34423beb3bf22a8520d4..36d768895303221efc61bc1cfc7090dfd1821799 100644
+--- a/src/lib/app/RvCommon/RvProfileManager.cpp
++++ b/src/lib/app/RvCommon/RvProfileManager.cpp
+@@ -286,7 +286,7 @@ namespace Rv
+         catch (...)
+         {
+             ok = false;
+-            m_ui.profileDescriptionBrowser->setText("ERROR: reading profile");
++            m_ui.profileDescriptionBrowser->setText(tr("ERROR: reading profile"));
+         }
+ 
+         if (ok)
+@@ -294,7 +294,7 @@ namespace Rv
+             string comment = profile->comment();
+             m_ui.profileDescriptionBrowser->setText(comment.c_str());
+             m_ui.profileDescriptionBrowser->append("");
+-            m_ui.profileDescriptionBrowser->append("Non-default Values:");
++            m_ui.profileDescriptionBrowser->append(tr("Non-default Values:"));
+ 
+             string desc = profile->structureDescription();
+             m_ui.profileDescriptionBrowser->append(desc.c_str());
+diff --git a/src/lib/app/RvCommon/RvSourceEditor.cpp b/src/lib/app/RvCommon/RvSourceEditor.cpp
+index 0ceeb4bdf111e4ee9c27f6db8263c34594a71c33..aa8f0a08faf67de65f1b347e2be8af5ff211cf0f 100644
+--- a/src/lib/app/RvCommon/RvSourceEditor.cpp
++++ b/src/lib/app/RvCommon/RvSourceEditor.cpp
+@@ -63,11 +63,11 @@ namespace Rv
+         m_highlighter = new GLSLSyntaxHighlighter(m_ui.textEdit->document());
+ 
+         // m_typeComboBox->addItem("Source", QVariant("source"));
+-        m_typeComboBox->addItem("Filter", QVariant("filter"));
+-        m_typeComboBox->addItem("Color", QVariant("color"));
+-        m_typeComboBox->addItem("Merge", QVariant("merge"));
+-        m_typeComboBox->addItem("Transition", QVariant("transition"));
+-        m_typeComboBox->addItem("Combine", QVariant("combine"));
++        m_typeComboBox->addItem(tr("Filter"), QVariant("filter"));
++        m_typeComboBox->addItem(tr("Color"), QVariant("color"));
++        m_typeComboBox->addItem(tr("Merge"), QVariant("merge"));
++        m_typeComboBox->addItem(tr("Transition"), QVariant("transition"));
++        m_typeComboBox->addItem(tr("Combine"), QVariant("combine"));
+ 
+         connect(m_ui.actionCompile, SIGNAL(triggered()), this, SLOT(compile()));
+         connect(m_ui.actionRevert, SIGNAL(triggered()), this, SLOT(revert()));
+@@ -368,8 +368,8 @@ namespace Rv
+ 
+             if (message == "")
+             {
+-                m_ui.outputTextEdit->append(QString("<i><font color=grey>Compilation "
+-                                                    "Succeeded</font></i> - %1")
++                m_ui.outputTextEdit->append(tr("<i><font color=grey>Compilation "
++                                               "Succeeded</font></i> - %1")
+                                                 .arg(dtString));
+             }
+             else
+diff --git a/src/lib/app/RvCommon/RvTopViewToolBar.cpp b/src/lib/app/RvCommon/RvTopViewToolBar.cpp
+index fecf660a51174b086f377b9480b04db596635763..6f539f1fab1813ca99c0565cd09b523e9fd5f8af 100644
+--- a/src/lib/app/RvCommon/RvTopViewToolBar.cpp
++++ b/src/lib/app/RvCommon/RvTopViewToolBar.cpp
+@@ -92,14 +92,14 @@ namespace Rv
+ 
+         m_viewBackAction = addAction("");
+         m_viewBackAction->setIcon(QIcon(":/images/view_back.png"));
+-        m_viewBackAction->setToolTip("Switch to previous View");
++        m_viewBackAction->setToolTip(tr("Switch to previous View"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(m_viewBackAction));
+         b->setProperty("tbstyle", QVariant(QString("view_menu")));
+         b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+ 
+         m_viewForwardAction = addAction("");
+         m_viewForwardAction->setIcon(QIcon(":/images/view_forwd.png"));
+-        m_viewForwardAction->setToolTip("Switch to next View");
++        m_viewForwardAction->setToolTip(tr("Switch to next View"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(m_viewForwardAction));
+         b->setProperty("tbstyle", QVariant(QString("view_menu")));
+         b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+@@ -109,13 +109,15 @@ namespace Rv
+ 
+         QToolButton* viewButton = new QToolButton(this);
+         m_viewMenuAction = new QAction(this);
+-        m_viewMenuAction->setToolTip("Select a View");
++        m_viewMenuAction->setObjectName("rvViewSelectorAction");
++        m_viewMenuAction->setToolTip(tr("Select a View"));
+         viewButton->setDefaultAction(m_viewMenuAction);
+         viewButton->setProperty("tbstyle", QVariant(QString("view_menu")));
+         viewButton->setPopupMode(QToolButton::InstantPopup);
+         viewButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+ 
+         m_viewMenu = new QMenu(viewButton);
++        m_viewMenu->setObjectName("rvViewSelectorMenu");
+         m_viewMenu->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+         m_viewMenu->setProperty("tbstyle", QVariant(QString("view_menu")));
+         m_viewMenu->setStyleSheet("QMenu::item:checked { background-color: rgb(20,20,20); }");
+@@ -129,14 +131,14 @@ namespace Rv
+ 
+         m_fullScreenAction = addAction("");
+         m_fullScreenAction->setIcon(QIcon(":/images/fullscreen.png"));
+-        m_fullScreenAction->setToolTip("Toggle full-screen mode");
++        m_fullScreenAction->setToolTip(tr("Toggle full-screen mode"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(m_fullScreenAction));
+         b->setProperty("tbstyle", QVariant(QString("view_menu")));
+         b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+         b->setPopupMode(QToolButton::InstantPopup);
+ 
+         m_frameAction = addAction("");
+-        m_frameAction->setToolTip("Frame image in view");
++        m_frameAction->setToolTip(tr("Frame image in view"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(m_frameAction));
+         b->setIcon(QIcon(":/images/frame.png"));
+         b->setProperty("tbstyle", QVariant(QString("view_menu")));
+@@ -145,9 +147,9 @@ namespace Rv
+         b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+ 
+         m = new QMenu(b);
+-        a = m->addAction("Frame");
++        a = m->addAction(tr("Frame"));
+         a->setData(QString("extra_commands.frameImage()"));
+-        a = m->addAction("Frame Width");
++        a = m->addAction(tr("Frame Width"));
+         a->setData(QString("rvui.frameWidth(nil)"));
+ 
+         b->setMenu(m);
+@@ -164,13 +166,13 @@ namespace Rv
+         b->setPopupMode(QToolButton::InstantPopup);
+         b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+         m = new QMenu(b);
+-        m->addAction("Background")->setDisabled(true);
+-        m_blackBGAction = m->addAction("  Black");
+-        m_18GreyBGAction = m->addAction("  18% Grey");
+-        m_50GreyBGAction = m->addAction("  50% Grey");
+-        m_whiteBGAction = m->addAction("  White");
+-        m_checkerBGAction = m->addAction("  Checker");
+-        m_crossHatchBGAction = m->addAction("  Cross Hatch");
++        m->addAction(tr("Background"))->setDisabled(true);
++        m_blackBGAction = m->addAction(tr("  Black"));
++        m_18GreyBGAction = m->addAction(tr("  18% Grey"));
++        m_50GreyBGAction = m->addAction(tr("  50% Grey"));
++        m_whiteBGAction = m->addAction(tr("  White"));
++        m_checkerBGAction = m->addAction(tr("  Checker"));
++        m_crossHatchBGAction = m->addAction(tr("  Cross Hatch"));
+         m->setStyleSheet("QMenu::item:checked { background-color: rgb(20,20,20); }");
+         m_blackBGAction->setCheckable(true);
+         m_18GreyBGAction->setCheckable(true);
+@@ -185,7 +187,7 @@ namespace Rv
+         m_checkerBGAction->setIcon(QIcon(":/images/checker.png"));
+         m_crossHatchBGAction->setIcon(QIcon(":/images/cross_hatch.png"));
+         b->setMenu(m);
+-        m_bgMenuAction->setToolTip("Select background style");
++        m_bgMenuAction->setToolTip(tr("Select background style"));
+ 
+         connect(m, SIGNAL(aboutToShow()), this, SLOT(bgMenuUpdate()));
+         connect(m_blackBGAction, SIGNAL(triggered()), this, SLOT(bgBlack()));
+@@ -195,23 +197,23 @@ namespace Rv
+         connect(m_checkerBGAction, SIGNAL(triggered()), this, SLOT(bgChecker()));
+         connect(m_crossHatchBGAction, SIGNAL(triggered()), this, SLOT(bgHatch()));
+ 
+-        m_stereoMenuAction = addAction("Mono");
++        m_stereoMenuAction = addAction(tr("Mono"));
+         m_stereoMenuAction->setIcon(QIcon(":/images/stereo.png"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(m_stereoMenuAction));
+         b->setProperty("tbstyle", QVariant(QString("view_menu")));
+         b->setPopupMode(QToolButton::InstantPopup);
+         b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+         m = new QMenu(b);
+-        m->addAction("Stereo")->setDisabled(true);
+-        m_monoStereoAction = m->addAction("  Mono");
+-        m_anaglyphStereoAction = m->addAction("  Anaglyph");
+-        m_lumanaglyphStereoAction = m->addAction("  Luminance Anaglyph");
+-        m_sideBySideStereoAction = m->addAction("  Side by Side");
+-        m_mirroredSideBySideStereoAction = m->addAction("  Mirrored");
+-        m_checkerStereoAction = m->addAction("  DLP Checker");
+-        m_scanlineStereoAction = m->addAction("  Scanline");
+-        m_leftStereoAction = m->addAction("  Left Only");
+-        m_rightStereoAction = m->addAction("  Right Only");
++        m->addAction(tr("Stereo"))->setDisabled(true);
++        m_monoStereoAction = m->addAction(tr("  Mono"));
++        m_anaglyphStereoAction = m->addAction(tr("  Anaglyph"));
++        m_lumanaglyphStereoAction = m->addAction(tr("  Luminance Anaglyph"));
++        m_sideBySideStereoAction = m->addAction(tr("  Side by Side"));
++        m_mirroredSideBySideStereoAction = m->addAction(tr("  Mirrored"));
++        m_checkerStereoAction = m->addAction(tr("  DLP Checker"));
++        m_scanlineStereoAction = m->addAction(tr("  Scanline"));
++        m_leftStereoAction = m->addAction(tr("  Left Only"));
++        m_rightStereoAction = m->addAction(tr("  Right Only"));
+         // m_shutterStereoAction = m->addAction("  Shutter");
+         m_monoStereoAction->setCheckable(true);
+         m_anaglyphStereoAction->setCheckable(true);
+@@ -234,11 +236,11 @@ namespace Rv
+         m_rightStereoAction->setData(QString("right"));
+         //        m_shutterStereoAction->setData(QString("hardware"));
+         m->addSeparator();
+-        m_swapStereoAction = m->addAction("Swap Eyes");
++        m_swapStereoAction = m->addAction(tr("Swap Eyes"));
+         m_swapStereoAction->setCheckable(true);
+         b->setMenu(m);
+         stereoMenuUpdate();
+-        m_stereoMenuAction->setToolTip("Select stereoscopic output style");
++        m_stereoMenuAction->setToolTip(tr("Select stereoscopic output style"));
+ 
+         m_stereoActions.push_back(m_monoStereoAction);
+         m_stereoActions.push_back(m_anaglyphStereoAction);
+@@ -265,22 +267,22 @@ namespace Rv
+         //         SLOT(shutterStereo()));
+         connect(m_swapStereoAction, SIGNAL(triggered()), this, SLOT(swapEyes()));
+ 
+-        m_channelMenuAction = addAction("Color (RGB)");
++        m_channelMenuAction = addAction(tr("Color (RGB)"));
+         m_channelMenuAction->setIcon(QIcon(":/images/view_channel.png"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(m_channelMenuAction));
+         b->setProperty("tbstyle", QVariant(QString("view_menu")));
+         b->setPopupMode(QToolButton::InstantPopup);
+         b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+         m = new QMenu(b);
+-        m->addAction("Channels")->setDisabled(true);
+-        m_RGBChannelAction = m->addAction("  Color (RGB)");
+-        m_RChannelAction = m->addAction("  Red");
+-        m_GChannelAction = m->addAction("  Green");
+-        m_BChannelAction = m->addAction("  Blue");
+-        m_AChannelAction = m->addAction("  Alpha");
+-        m_LChannelAction = m->addAction("  Luminance");
++        m->addAction(tr("Channels"))->setDisabled(true);
++        m_RGBChannelAction = m->addAction(tr("  Color (RGB)"));
++        m_RChannelAction = m->addAction(tr("  Red"));
++        m_GChannelAction = m->addAction(tr("  Green"));
++        m_BChannelAction = m->addAction(tr("  Blue"));
++        m_AChannelAction = m->addAction(tr("  Alpha"));
++        m_LChannelAction = m->addAction(tr("  Luminance"));
+         b->setMenu(m);
+-        m_channelMenuAction->setToolTip("Color channel view control");
++        m_channelMenuAction->setToolTip(tr("Color channel view control"));
+ 
+         m_RGBChannelAction->setCheckable(true);
+         m_RChannelAction->setCheckable(true);
+@@ -297,37 +299,37 @@ namespace Rv
+         connect(m_AChannelAction, SIGNAL(triggered()), this, SLOT(channelsA()));
+         connect(m_LChannelAction, SIGNAL(triggered()), this, SLOT(channelsL()));
+ 
+-        m_monitorMenuAction = addAction("NO MONITOR");
++        m_monitorMenuAction = addAction(tr("NO MONITOR"));
+         m_monitorMenuAction->setIcon(QIcon(":/images/view_display.png"));
+         b = dynamic_cast<QToolButton*>(widgetForAction(m_monitorMenuAction));
+         b->setProperty("tbstyle", QVariant(QString("view_menu")));
+         b->setPopupMode(QToolButton::InstantPopup);
+         b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+         m = new QMenu(b);
+-        m_transferTitleAction = m->addAction("Transfer Function");
++        m_transferTitleAction = m->addAction(tr("Transfer Function"));
+         m_transferTitleAction->setDisabled(true);
+-        m_noTransferAction = m->addAction("  None");
+-        m_srgbAction = m->addAction("  sRGB");
+-        m_rec709Action = m->addAction("  Rec.709");
+-        m_g22Action = m->addAction("  Gamma 2.2");
+-        m_g24Action = m->addAction("  Gamma 2.4");
+-        m_g26Action = m->addAction("  Gamma 2.6");
+-        m_gOtherAction = m->addAction("  Other Gamma");
++        m_noTransferAction = m->addAction(tr("  None"));
++        m_srgbAction = m->addAction(tr("  sRGB"));
++        m_rec709Action = m->addAction(tr("  Rec.709"));
++        m_g22Action = m->addAction(tr("  Gamma 2.2"));
++        m_g24Action = m->addAction(tr("  Gamma 2.4"));
++        m_g26Action = m->addAction(tr("  Gamma 2.6"));
++        m_gOtherAction = m->addAction(tr("  Other Gamma"));
+         m->addSeparator();
+-        m_primariesTitleAction = m->addAction("Primaries");
++        m_primariesTitleAction = m->addAction(tr("Primaries"));
+         m_primariesTitleAction->setDisabled(true);
+-        m_primaries709Action = m->addAction("  Rec.709");
+-        m_primariesP3Action = m->addAction("  P3");
+-        m_primariesSMPTECAction = m->addAction("  SMPTE-C");
+-        m_primariesXYZAction = m->addAction("  CIE XYZ");
+-        m_primariesAdobeRGBAction = m->addAction("  Adobe RGB");
+-        m_primariesDreamColorAction = m->addAction("  DreamColor Full Gamut");
++        m_primaries709Action = m->addAction(tr("  Rec.709"));
++        m_primariesP3Action = m->addAction(tr("  P3"));
++        m_primariesSMPTECAction = m->addAction(tr("  SMPTE-C"));
++        m_primariesXYZAction = m->addAction(tr("  CIE XYZ"));
++        m_primariesAdobeRGBAction = m->addAction(tr("  Adobe RGB"));
++        m_primariesDreamColorAction = m->addAction(tr("  DreamColor Full Gamut"));
+         m->addSeparator();
+-        m_ditherTitleAction = m->addAction("Dither");
++        m_ditherTitleAction = m->addAction(tr("Dither"));
+         m_ditherTitleAction->setDisabled(true);
+-        m_ditherOff = m->addAction("  Off");
+-        m_dither8 = m->addAction("  8 Bit");
+-        m_dither10 = m->addAction("  10 Bit");
++        m_ditherOff = m->addAction(tr("  Off"));
++        m_dither8 = m->addAction(tr("  8 Bit"));
++        m_dither10 = m->addAction(tr("  10 Bit"));
+         m->addSeparator();
+         QWidgetAction* wa = new QWidgetAction(m);
+         QWidget* base = new QWidget(b);
+@@ -340,7 +342,7 @@ namespace Rv
+         m->addAction(wa);
+         b->setMenu(m);
+         m_monitorMenu = m;
+-        m_monitorMenuAction->setToolTip("Configure display device");
++        m_monitorMenuAction->setToolTip(tr("Configure display device"));
+ 
+         m_noTransferAction->setCheckable(true);
+         m_srgbAction->setCheckable(true);
+@@ -603,9 +605,19 @@ namespace Rv
+             string pname = node->protocol();
+             string uiName = node->uiName();
+             string nodeName = node->name();
++            // Translate only the unchanged labels of the three built-in views.
++            // User names and node identities remain data, including custom
++            // views that happen to use one of these English display names.
++            QString displayName = UTF8::qconvert(uiName);
++            if (nodeName == "defaultLayout" && pname == "RVLayoutGroup" && uiName == "Default Layout")
++                displayName = tr("Default Layout");
++            else if (nodeName == "defaultSequence" && pname == "RVSequenceGroup" && uiName == "Default Sequence")
++                displayName = tr("Default Sequence");
++            else if (nodeName == "defaultStack" && pname == "RVStackGroup" && uiName == "Default Stack")
++                displayName = tr("Default Stack");
+             QString p = pname.c_str();
+             QIcon icon = m_iconMap.contains(p) ? m_iconMap[p] : m_iconMap[""];
+-            QAction* action = m_viewMenu->addAction(icon, UTF8::qconvert(uiName));
++            QAction* action = m_viewMenu->addAction(icon, displayName);
+ 
+             action->setData(UTF8::qconvert(nodeName));
+             action->setCheckable(true);
+@@ -614,7 +626,7 @@ namespace Rv
+             if (node == vnode)
+             {
+                 m_viewMenuAction->setIcon(icon);
+-                m_viewMenuAction->setText(UTF8::qconvert(uiName) + QString(" "));
++                m_viewMenuAction->setText(displayName + QString(" "));
+                 update();
+             }
+         }
+@@ -729,7 +741,7 @@ namespace Rv
+ 
+         if (!m_session)
+         {
+-            m_stereoMenuAction->setText("Mono");
++            m_stereoMenuAction->setText(tr("Mono"));
+             QToolButton* b = dynamic_cast<QToolButton*>(widgetForAction(m_stereoMenuAction));
+             b->setIcon(QIcon(":/images/stereo.png"));
+             return;
+@@ -1170,7 +1182,7 @@ namespace Rv
+         m_g26Action->setChecked(false);
+         m_gOtherAction->setChecked(false);
+         m_gOtherAction->setVisible(false);
+-        m_gOtherAction->setText("   Other Gamma");
++        m_gOtherAction->setText(tr("   Other Gamma"));
+ 
+         bool none = true;
+         if (srgb.value() == 1)
+@@ -1204,7 +1216,7 @@ namespace Rv
+             {
+                 m_gOtherAction->setChecked(true);
+                 m_gOtherAction->setVisible(true);
+-                m_gOtherAction->setText(QString("   Other Gamma (%1)").arg(y));
++                m_gOtherAction->setText(tr("   Other Gamma (%1)").arg(y));
+                 // do something here
+             }
+ 
+diff --git a/src/lib/app/mu_rvui/HUD.mu b/src/lib/app/mu_rvui/HUD.mu
+index a326c839a29d6503ffabd0410d0c0f91ae87f5da..b956933badf5ab64d1951c06ca6df07aae7a66c1 100644
+--- a/src/lib/app/mu_rvui/HUD.mu
++++ b/src/lib/app/mu_rvui/HUD.mu
+@@ -19,6 +19,7 @@ use gl;
+ use glu;
+ require io;
+ require runtime;
++require qt;
+ 
+ //----------------------------------------------------------------------
+ //
+@@ -42,12 +43,12 @@ class: ImageInfo : Widget
+ 
+     method: popupOpts (void; Event event)
+     {
+-        popupMenu(event, 
++        popupMenuLocalized(event,
+             newMenu(MenuItem[] {
+                 menuText("Image Info"),
+                 menuSeparator(),
+                 menuItem("Wrap Long Fields", "", "info_category", optWrap, isWrapping)
+-            })
++            }), "HUD.ImageInfo"
+         );
+     }
+ 
+@@ -202,7 +203,7 @@ class: ImageInfo : Widget
+ 
+         if (chans eq nil)
+         {
+-            attrs = (string,string)[] {("-", "Session is Empty")};
++            attrs = (string,string)[] {("-", qt.QCoreApplication.translate("RvMenu", "Session is Empty"))};
+         }
+         else
+         {
+@@ -262,7 +263,7 @@ class: ImageInfo : Widget
+             x       = _x*devicePixelRatio + margin,
+             y       = _y*devicePixelRatio + margin,
+             wrap    = if (_wrap) then 80*devicePixelRatio else 0,
+-            tbox    = drawNameValuePairs(expandNameValuePairs(attrs, wrap),
++            tbox    = drawInterfaceNameValuePairs(expandNameValuePairs(attrs, wrap),
+                                          fg, bg, x, y, margin)._0,
+             emin    = vec2f(_x, _y),
+             emax    = emin + (tbox + vec2f(margin*2.0, 0.0))/devicePixelRatio;
+@@ -320,14 +321,14 @@ class: InfoStrip : Widget
+ 
+     method: popupOpts (void; Event event)
+     {
+-        popupMenu(event, 
++        popupMenuLocalized(event,
+             newMenu(MenuItem[] {
+                 menuText("Info Strip"),
+                 menuSeparator(),
+                 menuItem("Show Filename", "", "info_category", showFilename(true), isFilename(true)),
+                 menuItem("Show UI Name", "", "info_category", showFilename(false), isFilename(false)),
+                 menuItem("Scale with Resolution", "", "info_category", toggleScaleWithResolution, isScaling)
+-            })
++            }), "HUD.InfoStrip"
+         );
+     }
+ 
+@@ -433,7 +434,7 @@ class: InfoStrip : Widget
+         gltext.size(textSize);
+         setupProjection(w, h, event.domainVerticalFlip());
+ 
+-        let b      = gltext.bounds(filename),
++        let b      = gltext.interfaceBounds(filename),
+             margin = state.config.bevelMargin*devicePixelRatio,
+             m2     = margin,
+             md     = margin / 2,
+@@ -451,7 +452,7 @@ class: InfoStrip : Widget
+         let bg = state.config.bgFeedback,
+             fg = state.config.fgFeedback;
+ 
+-        drawTextWithCartouche(x, y, filename, textSize,
++        drawInterfaceTextWithCartouche(x, y, filename, textSize,
+                                 fg, bg,
+                                 circleGlyph, bg * .7);
+ 
+@@ -558,17 +559,17 @@ class: ProcessInfo : Widget
+             y       = _y*devicePixelRatio + margin,
+             bgbar   = (fg + bg) / 4.0,
+             fgbar   = (fg + bg) / 2.0,
+-            barsize = gltext.bounds("          ")[2] * 8,
+-            wwidth  = barsize + gltext.bounds(p._name + " 000.00%%")[2] + margin;
++            barsize = gltext.interfaceBounds("          ")[2] * 8,
++            wwidth  = barsize + gltext.interfaceBounds(p._name + " 000.00%%")[2] + margin;
+ 
+-        let (tbox, nbounds, vbounds, nw) = drawNameValuePairs(expandNameValuePairs(pairs),
++        let (tbox, nbounds, vbounds, nw) = drawInterfaceNameValuePairs(expandNameValuePairs(pairs),
+                                                               fg, bg, x, y, margin, 
+                                                               0, 0, 
+                                                               wwidth, 0);
+ 
+         let md   = margin / 2,
+-            fa   = int(gltext.ascenderHeight()),
+-            fd   = int(gltext.descenderDepth()),
++            fa   = int(gltext.interfaceAscenderHeight()),
++            fd   = int(gltext.interfaceDescenderDepth()),
+             th   = fa - fd,
+             px   = x + nw + md,
+             py   = y + th * 1 + fd + th/2,
+@@ -617,7 +618,7 @@ class: ProcessInfo : Widget
+         _buttons[0]._h = (rad * 2)/devicePixelRatio;
+         _buttons[0]._callback = killProcess;
+ 
+-        gltext.writeAt(pcx + 3.0 * rad, pcy, "%-3.1f%%" % pcent);
++        gltext.interfaceWriteAt(pcx + 3.0 * rad, pcy, "%-3.1f%%" % pcent);
+ 
+         drawCloseButton(pcx + rad + 4, pcy + rad, rad, 
+                         if (d <= rad) then Color(1,0,0,1) else fgbar, 
+@@ -1223,7 +1224,7 @@ class: SourceDetails : Widget
+         let margin  = state.config.bevelMargin*devicePixelRatio,
+             x       = _x*devicePixelRatio + margin,
+             y       = _y*devicePixelRatio + margin,
+-            tbox    = drawNameValuePairs(expandNameValuePairs(details),
++            tbox    = drawInterfaceNameValuePairs(expandNameValuePairs(details),
+                                          fg, bg, x, y, margin)._0,
+             emin    = vec2f(_x, _y),
+             emax    = emin + (tbox + vec2f(margin*2.0, 0.0))/devicePixelRatio;
+diff --git a/src/lib/app/mu_rvui/commands.mud b/src/lib/app/mu_rvui/commands.mud
+index ae4a78f1067bd5e06a62472c1b1b4efaf4cd2174..b996606222fd4d567e85277deee923fe5f2b7481 100644
+--- a/src/lib/app/mu_rvui/commands.mud
++++ b/src/lib/app/mu_rvui/commands.mud
+@@ -1358,6 +1358,7 @@ loadCount "Number of sources loaded since progressive loading started."
+ resizeFit "Cause the window geometry to be resized to the contents if possible."
+ setViewSize "Set the view area size to an exact width and height."
+ popupMenu "Display a popup menu at the pointer location in event."
++popupMenuLocalized "Display a shipped HUD popup with explicitly scoped display translations. Source MenuItem labels and callbacks are unchanged."
+ setWindowTitle "Set the title of the window to title. On linux the window manager can override this."
+ center "Center the window on screen."
+ close "Close the session window and exit the session."
+diff --git a/src/lib/app/mu_rvui/extra_commands.mu b/src/lib/app/mu_rvui/extra_commands.mu
+index a7db4327e58b8afc53b7ec22253b6d35d5681bc8..c5fce62d79260236cf5c4c10b907554effa2153e 100644
+--- a/src/lib/app/mu_rvui/extra_commands.mu
++++ b/src/lib/app/mu_rvui/extra_commands.mu
+@@ -94,6 +94,7 @@ use io;
+ use app_utils;
+ use mode_manager;
+ require system;
++require qt;
+ 
+ \: displayFeedback (void;
+                     string text,
+@@ -882,6 +883,44 @@ Return list of node names in the given group, with type equal to the given type.
+     return if propertyExists(name) then getStringProperty(name).front() else node;
+ }
+ 
++// Display-only name. uiName() and all serialized/session identifiers stay
++// unchanged; an explicitly renamed default node is displayed verbatim.
++\: uiDisplayName (string; string innode)
++{
++    let group = topLevelGroup(innode),
++        node = if group eq nil then innode else group,
++        name = uiName(node);
++    if (node == "defaultLayout" && name == "Default Layout" && nodeType(node) == "RVLayoutGroup")
++        return qt.QCoreApplication.translate("RvMenu", "Default Layout");
++    if (node == "defaultSequence" && name == "Default Sequence" && nodeType(node) == "RVSequenceGroup")
++        return qt.QCoreApplication.translate("RvMenu", "Default Sequence");
++    if (node == "defaultStack" && name == "Default Stack" && nodeType(node) == "RVStackGroup")
++        return qt.QCoreApplication.translate("RvMenu", "Default Stack");
++    return name;
++}
++
++// Format only known HUD UI fragments. Source names and arbitrary error text
++// remain data. An empty root view is the only unambiguous default-name case.
++\: noImageFeedbackText (string; string mediaName, string statusNode, string statusMessage)
++{
++    string displayNode = statusNode;
++    string displayMessage = statusMessage;
++    if (statusMessage == "Empty")
++    {
++        displayMessage = qt.QCoreApplication.translate("RvMenu", "Empty");
++        let currentView = viewNode();
++        if (statusNode == uiName(currentView) && nodeConnections(currentView, false)._0.empty())
++            displayNode = uiDisplayName(currentView);
++    }
++    return if mediaName != ""
++                then qt.QCoreApplication.translate("RvMenu", "%s -- No Image") % mediaName
++            else if displayMessage != ""
++                then "%s -- %s" % (displayNode, displayMessage)
++            else if displayNode != ""
++                then qt.QCoreApplication.translate("RvMenu", "%s -- No Image") % displayNode
++            else qt.QCoreApplication.translate("RvMenu", "No Image");
++}
++
+ \: isViewNode (bool; string name)
+ {
+     for_each (n; viewNodes()) if (n == name) return true;
+diff --git a/src/lib/app/mu_rvui/glyph.mu b/src/lib/app/mu_rvui/glyph.mu
+index 436e65b8eb954c412eacf0dcb2ce71daed28c2c9..ed9eb877095c92aaf43dfbbce337e07e03d28407 100644
+--- a/src/lib/app/mu_rvui/glyph.mu
++++ b/src/lib/app/mu_rvui/glyph.mu
+@@ -336,12 +336,14 @@ operator: & (Glyph; Glyph a, Glyph b)
+ 
+ 
+ 
+-\: drawTextWithCartouche (BBox; float x, float y, string text,
++\: _drawTextWithCartouche (BBox; float x, float y, string text,
+                           float textsize, Color textcolor,
+                           Color bgcolor,
+                           Glyph g = nil,
+                           Color gcolor = Color(.2,.2,.2,1),
+-                          float[] textSizes = nil)
++                          float[] textSizes = nil,
++                          bool interfaceText=false)
++
+ {
+     // Auto-detect multiline text (check before adding glyph spacing)
+     // Split by newline and check if we have more than one line
+@@ -392,9 +394,9 @@ operator: & (Glyph; Glyph a, Glyph b)
+         }
+     }
+ 
+-    let b = if isMultiline then gltext.boundsNL(text) else gltext.bounds(text),
+-        a = gltext.ascenderHeight(),
+-        d = gltext.descenderDepth(),
++    let b = if isMultiline then (if interfaceText then gltext.interfaceBoundsNL(text) else gltext.boundsNL(text)) else (if interfaceText then gltext.interfaceBounds(text) else gltext.bounds(text)),
++        a = (if interfaceText then gltext.interfaceAscenderHeight() else gltext.ascenderHeight()),
++        d = (if interfaceText then gltext.interfaceDescenderDepth() else gltext.descenderDepth()),
+         mx = (a - d) * .05;
+ 
+     // Calculate dimensions based on single-line vs multiline
+@@ -473,8 +475,8 @@ operator: & (Glyph; Glyph a, Glyph b)
+                           then textSizes[i] * devicePixelRatio() 
+                           else textsize;
+             gltext.size(currSize);
+-            let currA = gltext.ascenderHeight();
+-            let currD = gltext.descenderDepth();
++            let currA = (if interfaceText then gltext.interfaceAscenderHeight() else gltext.ascenderHeight());
++            let currD = (if interfaceText then gltext.interfaceDescenderDepth() else gltext.descenderDepth());
+             
+             if (i == 0)
+             {
+@@ -522,13 +524,14 @@ operator: & (Glyph; Glyph a, Glyph b)
+             }
+             
+             // Render the line
+-            gltext.writeAt(textX, lineY, lines[reverseIdx]);
++            if (interfaceText) gltext.interfaceWriteAt(textX, lineY, lines[reverseIdx]);
++            else gltext.writeAt(textX, lineY, lines[reverseIdx]);
+             
+             // Calculate advance to next line based on current line's size
+             if (i < lines.size() - 1)  // Not the last line
+             {
+-                let currA = gltext.ascenderHeight();
+-                let currD = gltext.descenderDepth();
++                let currA = (if interfaceText then gltext.interfaceAscenderHeight() else gltext.ascenderHeight());
++                let currD = (if interfaceText then gltext.interfaceDescenderDepth() else gltext.descenderDepth());
+                 currentY += currA - (2.0 * currD);
+             }
+         }
+@@ -536,12 +539,31 @@ operator: & (Glyph; Glyph a, Glyph b)
+     else 
+     {
+         // Single-line text: size already set at line 372
+-        gltext.writeAt(x, y, text);
++        if (interfaceText) gltext.interfaceWriteAt(x, y, text);
++        else gltext.writeAt(x, y, text);
+     }
+ 
+     return BBox(x0 - rad, y0, x1 + rad, y1);
+ }
+ 
++// Interface variants scope the font only during native text operations;
++// custom glyph callbacks still run with the caller's original font.
++\: drawTextWithCartouche (BBox; float x, float y, string text,
++                          float textsize, Color textcolor, Color bgcolor,
++                          Glyph g=nil, Color gcolor=Color(.2,.2,.2,1),
++                          float[] textSizes=nil)
++{
++    _drawTextWithCartouche(x, y, text, textsize, textcolor, bgcolor, g, gcolor, textSizes, false);
++}
++
++\: drawInterfaceTextWithCartouche (BBox; float x, float y, string text,
++                          float textsize, Color textcolor, Color bgcolor,
++                          Glyph g=nil, Color gcolor=Color(.2,.2,.2,1),
++                          float[] textSizes=nil)
++{
++    _drawTextWithCartouche(x, y, text, textsize, textcolor, bgcolor, g, gcolor, textSizes, true);
++}
++
+ \: setupProjection (void; float w, float h, bool vflip = false)
+ {
+     glMatrixMode(GL_PROJECTION);
+@@ -800,13 +822,15 @@ operator: & (Glyph; Glyph a, Glyph b)
+     return final;
+ }
+ 
+-\: nameValuePairBounds (NameValueBounds; (string,string)[] pairs, int margin)
++\: _nameValuePairBounds (NameValueBounds; (string,string)[] pairs, int margin,
++                          bool interfaceText=false)
++
+ {
+     let nw      = 0,
+         vw      = 0,
+         h       = 0,
+-        a       = gltext.ascenderHeight(),
+-        d       = gltext.descenderDepth(),
++        a       = (if interfaceText then gltext.interfaceAscenderHeight() else gltext.ascenderHeight()),
++        d       = (if interfaceText then gltext.interfaceDescenderDepth() else gltext.descenderDepth()),
+         th      = a - d,
+         x0      = -d,
+         x1      = -d,
+@@ -818,8 +842,8 @@ operator: & (Glyph; Glyph a, Glyph b)
+     for_each (a; pairs)
+     {
+         let (name, value) = a,
+-            bn            = gltext.bounds(name),
+-            bv            = gltext.bounds(value);
++            bn            = (if interfaceText then gltext.interfaceBounds(name) else gltext.bounds(name)),
++            bv            = (if interfaceText then gltext.interfaceBounds(value) else gltext.bounds(value));
+ 
+         nbounds.push_back(bn);
+         vbounds.push_back(bv);
+@@ -836,6 +860,11 @@ operator: & (Glyph; Glyph a, Glyph b)
+ }
+ 
+ 
++\: nameValuePairBounds (NameValueBounds; (string,string)[] pairs, int margin)
++{
++    _nameValuePairBounds(pairs, margin, false);
++}
++
+ \: expandNameValuePairs (StringPair[]; StringPair[] pairs, int wrap=0)
+ {
+     StringPair[] newPairs;
+@@ -874,22 +903,22 @@ operator: & (Glyph; Glyph a, Glyph b)
+     newPairs;
+ }
+ 
+-\: drawNameValuePairs (NameValueBounds;
++\: _drawNameValuePairs (NameValueBounds;
+                        StringPair[] pairs,
+                        Color fg, Color bg,
+                        int x, int y, int margin,
+                        int maxw=0, int maxh=0,
+                        int minw=0, int minh=0,
+-                       bool nobox=false)
++                       bool nobox=false, bool interfaceText=false)
+ {
+     m := margin;    // alias
+ 
+-    let (tbox, nbounds, vbounds, nw) = nameValuePairBounds(pairs, m);
++    let (tbox, nbounds, vbounds, nw) = _nameValuePairBounds(pairs, m, interfaceText);
+ 
+     let vw      = 0,
+         h       = 0,
+-        a       = gltext.ascenderHeight(),
+-        d       = gltext.descenderDepth(),
++        a       = (if interfaceText then gltext.interfaceAscenderHeight() else gltext.ascenderHeight()),
++        d       = (if interfaceText then gltext.interfaceDescenderDepth() else gltext.descenderDepth()),
+         th      = a - d;
+ 
+     float
+@@ -929,9 +958,11 @@ operator: & (Glyph; Glyph a, Glyph b)
+             tw      = bn[2] + bn[0];
+ 
+         gltext.color(fg - Color(0,0,0,.25));
+-        gltext.writeAt(x + (nw - tw), y, n);
++        if (interfaceText) gltext.interfaceWriteAt(x + (nw - tw), y, n);
++        else gltext.writeAt(x + (nw - tw), y, n);
+         gltext.color(fg);
+-        gltext.writeAt(x + nw + m/2, y, v);
++        if (interfaceText) gltext.interfaceWriteAt(x + nw + m/2, y, v);
++        else gltext.writeAt(x + nw + m/2, y, v);
+         y += th;
+         //if (i == s - 3) y+= m/2;
+     }
+@@ -942,6 +973,21 @@ operator: & (Glyph; Glyph a, Glyph b)
+     (tbox, nbounds, vbounds, nw);
+ }
+ 
++\: drawNameValuePairs (NameValueBounds; StringPair[] pairs, Color fg, Color bg,
++                       int x, int y, int margin, int maxw=0, int maxh=0,
++                       int minw=0, int minh=0, bool nobox=false)
++{
++    _drawNameValuePairs(pairs, fg, bg, x, y, margin, maxw, maxh, minw, minh, nobox, false);
++}
++
++\: drawInterfaceNameValuePairs (NameValueBounds; StringPair[] pairs, Color fg, Color bg,
++                       int x, int y, int margin, int maxw=0, int maxh=0,
++                       int minw=0, int minh=0, bool nobox=false)
++{
++    _drawNameValuePairs(pairs, fg, bg, x, y, margin, maxw, maxh, minw, minh, nobox, true);
++}
++
++
+ 
+ \: drawCloseButton (void; float x, float y, float radius,
+                     Color bg, Color fg)
+diff --git a/src/lib/app/mu_rvui/rvui.mu b/src/lib/app/mu_rvui/rvui.mu
+index 89d2d172e42ab4c7d8c37c911729bebf0cde6b09..95b8eafe5a99e8cbf916391e62c0d82e9f01f439 100644
+--- a/src/lib/app/mu_rvui/rvui.mu
++++ b/src/lib/app/mu_rvui/rvui.mu
+@@ -4852,7 +4852,7 @@ global let enterFrame = startTextEntryMode(\: (string;) {"Go To Frame: ";}, goto
+         elapsed = elapsedTime(),
+         ct = state.feedback - elapsed,
+         p  = if ct > 1.0 then 1.0 else (if ct < 0.0 then 0.0 else ct),
+-        sb = gltext.boundsNL(state.feedbackText);    // size of frame string
++        sb = gltext.interfaceBoundsNL(state.feedbackText);    // size of frame string
+ 
+     // Check if truncation feature is enabled and queue has messages
+     // If so, current message will be truncated to 1.5 second
+@@ -4876,7 +4876,7 @@ global let enterFrame = startTextEntryMode(\: (string;) {"Go To Frame: ";}, goto
+     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+ 
+     let m = margins();
+-    drawTextWithCartouche(m[0]*devicePixelRatio + positionSize,
++    drawInterfaceTextWithCartouche(m[0]*devicePixelRatio + positionSize,
+                           h-positionSize-sb[3] - m[2]*devicePixelRatio,
+                           state.feedbackText,
+                           textsize, fg, bg,
+@@ -4947,9 +4947,9 @@ global let enterFrame = startTextEntryMode(\: (string;) {"Go To Frame: ";}, goto
+ 
+     gltext.size(state.config.textEntryTextSize);
+ 
+-    let sb  = gltext.bounds(s),            // size of frame string
+-        mxb = gltext.bounds("||||"),
+-        tb  = gltext.bounds(state.text),
++    let sb  = gltext.interfaceBounds(s),            // size of frame string
++        mxb = gltext.interfaceBounds("||||"),
++        tb  = gltext.interfaceBounds(state.text),
+         w   = d.x,                         // window width
+         h   = d.y,                         // window height
+         hm0 = 10,                          // horizontal margin
+@@ -4986,13 +4986,13 @@ global let enterFrame = startTextEntryMode(\: (string;) {"Go To Frame: ";}, goto
+ 
+     glColor(state.config.fg);
+     gltext.color(state.config.fg);
+-    gltext.writeAtNL(hm0, vm0, s);
++    gltext.interfaceWriteAtNL(hm0, vm0, s);
+ 
+     //
+     //  Draw the text
+     //
+ 
+-    gltext.writeAtNL(hm0 + sb[2] + 10, vm0, state.text);
++    gltext.interfaceWriteAtNL(hm0 + sb[2] + 10, vm0, state.text);
+ 
+     //
+     //  Draw the cursor
+@@ -5065,7 +5065,7 @@ global let enterFrame = startTextEntryMode(\: (string;) {"Go To Frame: ";}, goto
+ 
+     if (partial && !loading)
+     {
+-        displayFeedback("Incomplete Image", 1, drawXGlyph);
++        displayFeedback(qt.QCoreApplication.translate("RvMenu", "Incomplete Image"), 1, drawXGlyph);
+         runtime.gc.pop_api();
+         return true;
+     }
+@@ -5075,13 +5075,7 @@ global let enterFrame = startTextEntryMode(\: (string;) {"Go To Frame: ";}, goto
+ 
+     if (fstatus == NoImageStatus)
+     {
+-        t =  if t != ""
+-                    then t + " -- No Image"
+-                else if statusMessage != ""
+-                    then "%s -- %s" % (statusNode, statusMessage)
+-                else if statusNode != ""
+-                    then statusNode + " -- No Image"
+-                else "No Image";
++        t = noImageFeedbackText(t, statusNode, statusMessage);
+     }
+     else if (noAttrs)
+     {
+@@ -5095,24 +5089,24 @@ global let enterFrame = startTextEntryMode(\: (string;) {"Go To Frame: ";}, goto
+ 
+             if (ins.empty())
+             {
+-                t = "%s is Empty" % uiName(viewNode());
++                t = qt.QCoreApplication.translate("RvMenu", "%s is Empty") % uiDisplayName(viewNode());
+             }
+             else
+             {
+-                t = "%s -- No Image Attributes Found" % uiName(viewNode());
++                t = qt.QCoreApplication.translate("RvMenu", "%s -- No Image Attributes Found") % uiDisplayName(viewNode());
+             }
+         }
+     }
+     else if (loading)
+     {
+-        t = "   Loading %d" % frame();
++        t = qt.QCoreApplication.translate("RvMenu", "   Loading %d") % frame();
+     }
+     else
+     {
+-        t = "Missing Source";
++        t = qt.QCoreApplication.translate("RvMenu", "Missing Source");
+     }
+ 
+-    let b  = gltext.bounds(t),
++    let b  = gltext.interfaceBounds(t),
+         tw = b[2],
+         th = b[3],
+         x  = w / 2 - tw / 2,
+@@ -5130,7 +5124,7 @@ global let enterFrame = startTextEntryMode(\: (string;) {"Go To Frame: ";}, goto
+     glVertex(w/2, h - h/8);
+     glEnd();
+ 
+-    drawTextWithCartouche(x, y, t, textsize,
++    drawInterfaceTextWithCartouche(x, y, t, textsize,
+                           state.config.fgFeedback,
+                           state.config.bgFeedback * colorscl);
+ 
+@@ -5702,7 +5696,7 @@ global bool debugGC = false;
+ 
+     if (loadTotal() != 0)
+     {
+-        displayFeedback("Loading %d of %d" % (loadCount()+1, loadTotal()), 
++        displayFeedback(qt.QCoreApplication.translate("RvMenu", "Loading %d of %d") % (loadCount()+1, loadTotal()),
+                         1.0,
+                         loadingProgressGlyph);
+         redraw();
+@@ -7258,7 +7252,7 @@ global bool debugGC = false;
+     s.scrubbed         = false;
+     s.scrubDisabled    = false;
+     s.playingBefore    = false;
+-    s.emptySessionStr  = "Empty Session";
++    s.emptySessionStr  = qt.QCoreApplication.translate("RvMenu", "Empty Session");
+     s.loadingCount     = 0;
+     s.pointerInSession = true;
+     s.dragDropOccuring = false;
+diff --git a/src/lib/app/py_rvui/rv/qtutils.py b/src/lib/app/py_rvui/rv/qtutils.py
+index ec72da90ca17375390da50166eeaf38f599604e5..1f36c1cd831536fb2da1bbeea157a5476c7ec52d 100644
+--- a/src/lib/app/py_rvui/rv/qtutils.py
++++ b/src/lib/app/py_rvui/rv/qtutils.py
+@@ -6,14 +6,14 @@
+ import rv.commands
+ 
+ try:
+-    from PySide2 import QtGui, QtWidgets
++    from PySide2 import QtCore, QtGui, QtWidgets
+     from PySide2.QtGui import *
+     from PySide2.QtWidgets import *
+     from shiboken2 import wrapInstance
+     from shiboken2 import getCppPointer
+ except ImportError:
+     try:
+-        from PySide6 import QtGui, QtWidgets
++        from PySide6 import QtCore, QtGui, QtWidgets
+         from PySide6.QtGui import *
+         from PySide6.QtWidgets import *
+         from shiboken6 import wrapInstance
+@@ -82,3 +82,8 @@ def javascriptExport(webFrame):
+ 
+     rvPyLongPtrs = getCppPointer(webFrame)
+     rv.commands.javascriptExport(rvPyLongPtrs[0])
++
++
++def translate_ui(source_text):
++    """Translate a UI caption without changing command IDs or user data."""
++    return QtCore.QCoreApplication.translate("RvMenu", source_text)
+diff --git a/src/lib/graphics/TwkGLFFBO/FBOVideoDevice.cpp b/src/lib/graphics/TwkGLFFBO/FBOVideoDevice.cpp
+index a22fcc7591a1078839a49efd76ece2619a4f9be5..962f7b9987ae545bfcf0f4e123628118db7b26ca 100644
+--- a/src/lib/graphics/TwkGLFFBO/FBOVideoDevice.cpp
++++ b/src/lib/graphics/TwkGLFFBO/FBOVideoDevice.cpp
+@@ -35,8 +35,7 @@
+ #endif
+ 
+ #ifdef PLATFORM_DARWIN
+-#include <OpenGL/CGLTypes.h>
+-#include <OpenGL/CGLRenderers.h>
++#include <TwkGLFFBO/MacCGLContext.h>
+ #endif
+ 
+ namespace TwkGLF
+@@ -107,44 +106,33 @@ namespace TwkGLF
+ 
+ #if defined(PLATFORM_DARWIN)
+ 
+-        unsigned long hwAttrs[] = {kCGLPFAAccelerated,
+-                                   kCGLPFAColorFloat, /* color buffers store floating point pixels */
+-                                   kCGLPFAColorSize,
+-                                   3 * 16,
+-                                   kCGLPFAAlphaSize,
+-                                   1 * 16,
+-                                   0};
+-
+-        unsigned long swAttrs[] = {kCGLPFAAllRenderers,
+-                                   kCGLPFARendererID,
+-                                   kCGLRendererAppleSWID,
+-                                   kCGLPFAColorFloat, /* color buffers store floating point pixels */
+-                                   kCGLPFAColorSize,
+-                                   3 * 32,
+-                                   kCGLPFAAlphaSize,
+-                                   1 * 32,
+-                                   0};
+-
+-        unsigned long* attrs = (m_swRendererOnMac) ? swAttrs : hwAttrs;
+-
+-        if (CGLError err = CGLChoosePixelFormat((CGLPixelFormatAttribute*)attrs, &m_imp->pfo, &m_imp->npfo))
++        const auto selected = MacCGL::createContext(m_swRendererOnMac);
++        if (!selected.context)
+         {
+-            cout << "ERROR: choosing pixel format: " << CGLErrorString(err) << endl;
+-            exit(-1);
+-        }
+-
+-        if (CGLError err = CGLCreateContext(m_imp->pfo, 0, &m_imp->ctx))
+-        {
+-            cout << "ERROR: create context: " << CGLErrorString(err) << endl;
++            for (std::size_t i = 0; i < selected.attemptCount; ++i)
++            {
++                const auto& attempt = selected.attempts[i];
++                cout << "ERROR: CGL " << attempt.name << ": choose=" << CGLErrorString(attempt.chooseError)
++                     << " (" << int(attempt.chooseError) << "), formats=" << attempt.pixelFormatCount
++                     << ", valid=" << attempt.pixelFormatValid;
++                if (attempt.createAttempted)
++                    cout << ", create=" << CGLErrorString(attempt.createError) << " (" << int(attempt.createError)
++                         << "), context=" << attempt.contextCreated;
++                if (attempt.currentAttempted)
++                    cout << ", current=" << CGLErrorString(attempt.currentError) << " (" << int(attempt.currentError)
++                         << "), matches=" << attempt.currentMatches;
++                if (attempt.restoreAttempted)
++                    cout << ", restore=" << CGLErrorString(attempt.restoreError) << " (" << int(attempt.restoreError) << ")";
++                cout << endl;
++            }
+             exit(-1);
+         }
+-
+-        // cout << "DEBUG: made the context" << endl;
+-
+-        if (CGLError err = CGLSetCurrentContext(m_imp->ctx))
++        m_imp->pfo = selected.pixelFormat;
++        m_imp->npfo = selected.pixelFormatCount;
++        m_imp->ctx = selected.context;
++        if (!m_swRendererOnMac && selected.selectedCandidate == std::string("typed-generic-float-renderer"))
+         {
+-            cout << "ERROR: CGLSetCurrentContext " << CGLErrorString(err) << endl;
+-            exit(-1);
++            cout << "INFO: hardware OpenGL context initialization failed; using the Apple software renderer" << endl;
+         }
+ 
+ #endif
+diff --git a/src/lib/image/MovieFFMpeg/MovieFFMpeg.cpp b/src/lib/image/MovieFFMpeg/MovieFFMpeg.cpp
+index 80f644baabecaaf76152e5e95836b55b73d6699e..247db70133e18a758fb094e1b3641850db789dd2 100644
+--- a/src/lib/image/MovieFFMpeg/MovieFFMpeg.cpp
++++ b/src/lib/image/MovieFFMpeg/MovieFFMpeg.cpp
+@@ -6160,11 +6160,13 @@ namespace TwkMovie
+         unsigned int audcap = MovieIO::MovieReadAudio | MovieIO::MovieWriteAudio | MovieIO::AttributeRead | MovieIO::AttributeWrite;
+ 
+         unsigned int vidcap = MovieIO::MovieRead | MovieIO::MovieWrite | audcap;
++        unsigned int readcap = MovieIO::MovieRead | MovieIO::MovieReadAudio | MovieIO::AttributeRead;
+ 
+         if (this->bruteForce())
+         {
+             vidcap |= MovieIO::MovieBruteForceIO;
+             audcap |= MovieIO::MovieBruteForceIO;
++            readcap |= MovieIO::MovieBruteForceIO;
+         }
+ 
+         MovieFFMpegIO::MFFormatMap formats;
+@@ -6181,7 +6183,13 @@ namespace TwkMovie
+         formats["mpg"] = make_pair("MPEG Format", vidcap);
+         formats["mxf"] = make_pair("Material eXchange Format", vidcap);
+         //    formats["ogv"]  = make_pair("OGG Video", vidcap);
+-        //    formats["webm"] = make_pair("WEBM Video", vidcap);
++
++        // Additional input containers do not add writer support.
++        formats["webm"] = make_pair("WebM", readcap);
++        formats["mpeg"] = make_pair("MPEG", readcap);
++        formats["wmv"] = make_pair("WMV", readcap);
++        formats["ts"] = make_pair("MPEG-TS", readcap);
++        formats["m2ts"] = make_pair("M2TS", readcap);
+ 
+         // Audio
+         //    formats["aac"]  = make_pair("Advanced Audio Codec", audcap);
+diff --git a/src/lib/mu/MuGLText/GLTextModule.cpp b/src/lib/mu/MuGLText/GLTextModule.cpp
+index aeab463438fcbee4d00bfc9f930940bbae7aa417..7df456312f90f49d220ebe0c62553f44c9c990e9 100644
+--- a/src/lib/mu/MuGLText/GLTextModule.cpp
++++ b/src/lib/mu/MuGLText/GLTextModule.cpp
+@@ -133,6 +133,18 @@ namespace Mu
+ 
+             new Function(c, "descenderDepth", GLTextModule::descenderDepth, None, Return, "float", End),
+ 
++            // Only built-in interface text opts in to the CJK font. Each
++            // native operation restores the original font before returning.
++            new Function(c, "interfaceWriteAt", GLTextModule::interfaceWriteAt, None, Return, "void", Args,
++                         "float", "float", "string", End),
++            new Function(c, "interfaceWriteAtNL", GLTextModule::interfaceWriteAtNL, None, Return, "int", Args,
++                         "float", "float", "string", Optional, "float", End),
++            new Function(c, "interfaceBounds", GLTextModule::interfaceBounds, None, Return, "float[4]", Args, "string", End),
++            new Function(c, "interfaceBoundsNL", GLTextModule::interfaceBoundsNL, None, Return, "float[4]", Args,
++                         "string", Optional, "float", End),
++            new Function(c, "interfaceAscenderHeight", GLTextModule::interfaceAscenderHeight, None, Return, "float", End),
++            new Function(c, "interfaceDescenderDepth", GLTextModule::interfaceDescenderDepth, None, Return, "float", End),
++
+             EndArguments);
+     }
+ 
+@@ -363,6 +375,75 @@ namespace Mu
+         NODE_RETURN(GLtext::globalDescenderHeight());
+     }
+ 
++    NODE_IMPLEMENTATION(GLTextModule::interfaceWriteAt, void)
++    {
++        // Evaluate Mu arguments before entering the native-only font scope.
++        const float x = NODE_ARG(0, float);
++        const float y = NODE_ARG(1, float);
++        const StringType::String* text = NODE_ARG_OBJECT(2, const StringType::String);
++        const string s = removeReturns(text->c_str());
++        InterfaceFontScope font;
++        GLtext::writeAt(x, y, s.c_str());
++    }
++
++    NODE_IMPLEMENTATION(GLTextModule::interfaceWriteAtNL, int)
++    {
++        const float x = NODE_ARG(0, float);
++        const float y = NODE_ARG(1, float);
++        const StringType::String* text = NODE_ARG_OBJECT(2, const StringType::String);
++        const string s = removeReturns(text->c_str());
++        const float mult = NODE_NUM_ARGS() == 4 ? NODE_ARG(3, float) : 1.0f;
++        InterfaceFontScope font;
++        NODE_RETURN(GLtext::writeAtNL(x, y, s.c_str(), mult));
++    }
++
++    NODE_IMPLEMENTATION(GLTextModule::interfaceBounds, Pointer)
++    {
++        Process* p = NODE_THREAD.process();
++        MuLangContext* c = static_cast<MuLangContext*>(p->context());
++        const StringType::String* text = NODE_ARG_OBJECT(0, const StringType::String);
++        const string s = removeReturns(text->c_str());
++        const FixedArrayType* atype = static_cast<const FixedArrayType*>(c->arrayType(c->floatType(), 1, 4));
++        FixedArray* result = static_cast<FixedArray*>(ClassInstance::allocate(atype));
++        InterfaceFontScope font;
++        const TwkMath::Box2f b = GLtext::bounds(s.c_str());
++        result->element<float>(0) = b.min.x;
++        result->element<float>(1) = b.min.y;
++        result->element<float>(2) = b.max.x;
++        result->element<float>(3) = b.max.y;
++        NODE_RETURN(result);
++    }
++
++    NODE_IMPLEMENTATION(GLTextModule::interfaceBoundsNL, Pointer)
++    {
++        Process* p = NODE_THREAD.process();
++        MuLangContext* c = static_cast<MuLangContext*>(p->context());
++        const StringType::String* text = NODE_ARG_OBJECT(0, const StringType::String);
++        const string s = removeReturns(text->c_str());
++        const float mult = NODE_NUM_ARGS() == 2 ? NODE_ARG(1, float) : 1.0f;
++        const FixedArrayType* atype = static_cast<const FixedArrayType*>(c->arrayType(c->floatType(), 1, 4));
++        FixedArray* result = static_cast<FixedArray*>(ClassInstance::allocate(atype));
++        InterfaceFontScope font;
++        const TwkMath::Box2f b = GLtext::boundsNL(s.c_str(), mult);
++        result->element<float>(0) = b.min.x;
++        result->element<float>(1) = b.min.y;
++        result->element<float>(2) = b.max.x;
++        result->element<float>(3) = b.max.y;
++        NODE_RETURN(result);
++    }
++
++    NODE_IMPLEMENTATION(GLTextModule::interfaceAscenderHeight, float)
++    {
++        InterfaceFontScope font;
++        NODE_RETURN(GLtext::globalAscenderHeight());
++    }
++
++    NODE_IMPLEMENTATION(GLTextModule::interfaceDescenderDepth, float)
++    {
++        InterfaceFontScope font;
++        NODE_RETURN(GLtext::globalDescenderHeight());
++    }
++
+ } // namespace Mu
+ 
+ #ifdef _MSC_VER
+diff --git a/src/lib/mu/MuGLText/MuGLText/GLTextModule.h b/src/lib/mu/MuGLText/MuGLText/GLTextModule.h
+index 38ee85cb98d943ad92cef157f80ef2de7cff60d0..75a067f7a59c55cd9f25cc46a23d4971826aaac4 100644
+--- a/src/lib/mu/MuGLText/MuGLText/GLTextModule.h
++++ b/src/lib/mu/MuGLText/MuGLText/GLTextModule.h
+@@ -28,6 +28,12 @@ namespace Mu
+         static NODE_DECLARATION(writeAt, void);
+         static NODE_DECLARATION(writeAtNLf, int);
+         static NODE_DECLARATION(writeAtNLfv, int);
++        static NODE_DECLARATION(interfaceWriteAt, void);
++        static NODE_DECLARATION(interfaceWriteAtNL, int);
++        static NODE_DECLARATION(interfaceBounds, Pointer);
++        static NODE_DECLARATION(interfaceBoundsNL, Pointer);
++        static NODE_DECLARATION(interfaceAscenderHeight, float);
++        static NODE_DECLARATION(interfaceDescenderDepth, float);
+         static NODE_DECLARATION(setSize, void);
+         static NODE_DECLARATION(getSize, int);
+         static NODE_DECLARATION(bounds, Pointer);
+diff --git a/src/lib/mu/MuQt5/QCoreApplicationType.cpp b/src/lib/mu/MuQt5/QCoreApplicationType.cpp
+index ee37361e4d86319b2db8a86f0873eb0e30e40f6c..2fbe3fe11e04fa5da0eb5530b5458c8db65c508c 100644
+--- a/src/lib/mu/MuQt5/QCoreApplicationType.cpp
++++ b/src/lib/mu/MuQt5/QCoreApplicationType.cpp
+@@ -530,6 +530,25 @@ namespace Mu
+ 
+     static NODE_IMPLEMENTATION(_n_startingUp0, bool) { NODE_RETURN(qt_QCoreApplication_startingUp_bool(NODE_THREAD)); }
+ 
++    // Expose Qt's UTF-8 translation API to Mu UI scripts. Internal RV menu
++    // identifiers stay untranslated; callers opt in for display captions only.
++    Pointer qt_QCoreApplication_translate_string_string_string_string_int(
++        Mu::Thread& NODE_THREAD, Pointer context, Pointer source, Pointer comment, int n)
++    {
++        MuLangContext* c = static_cast<MuLangContext*>(NODE_THREAD.context());
++        const QByteArray contextUtf8 = qstring(context).toUtf8();
++        const QByteArray sourceUtf8 = qstring(source).toUtf8();
++        const QByteArray commentUtf8 = qstring(comment).toUtf8();
++        return makestring(c, QCoreApplication::translate(contextUtf8.constData(), sourceUtf8.constData(),
++                          commentUtf8.isEmpty() ? nullptr : commentUtf8.constData(), n));
++    }
++
++    static NODE_IMPLEMENTATION(_n_translate0, Pointer)
++    {
++        NODE_RETURN(qt_QCoreApplication_translate_string_string_string_string_int(
++            NODE_THREAD, NODE_ARG(0, Pointer), NODE_ARG(1, Pointer), NODE_ARG(2, Pointer), NODE_ARG(3, int)));
++    }
++
+     static NODE_IMPLEMENTATION(_n_testAttribute0, bool)
+     {
+         NODE_RETURN(qt_QCoreApplication_testAttribute_bool_int(NODE_THREAD, NODE_ARG(0, int)));
+@@ -649,8 +668,10 @@ namespace Mu
+             new Function(c, "startingUp", _n_startingUp0, None, Compiled, qt_QCoreApplication_startingUp_bool, Return, "bool", End),
+             new Function(c, "testAttribute", _n_testAttribute0, None, Compiled, qt_QCoreApplication_testAttribute_bool_int, Return, "bool",
+                          Parameters, new Param(c, "attribute", "int"), End),
+-            // MISSING: translate (string; "const char *" context, "const char
+-            // *" sourceText, "const char *" disambiguation, int n)
++            new Function(c, "translate", _n_translate0, None, Compiled,
++                         qt_QCoreApplication_translate_string_string_string_string_int, Return, "string", Parameters,
++                         new Param(c, "context", "string"), new Param(c, "sourceText", "string"),
++                         new Param(c, "disambiguation", "string", Value(Pointer(0))), new Param(c, "n", "int", Value(-1)), End),
+             EndArguments);
+         globalScope()->addSymbols(EndArguments);
+         scope()->addSymbols(EndArguments);
+diff --git a/src/lib/mu/MuQt5/qtModule.cpp b/src/lib/mu/MuQt5/qtModule.cpp
+index a0d0bd0b2a66b3cab3b3d766112c97b9fbf4afa8..f4af80abfdb461395b841793cf7f259aa1a11f1c 100644
+--- a/src/lib/mu/MuQt5/qtModule.cpp
++++ b/src/lib/mu/MuQt5/qtModule.cpp
+@@ -282,6 +282,7 @@ namespace Mu
+         QWidget* parent = object<QWidget>(NODE_ARG_OBJECT(1, ClassInstance));
+ 
+         QUiLoader loader;
++        loader.setTranslationEnabled(true);
+         QFile file(filename->c_str());
+         file.open(QFile::ReadOnly);
+         QWidget* w = loader.load(&file, parent);
+diff --git a/src/lib/mu/MuQt6/QCoreApplicationType.cpp b/src/lib/mu/MuQt6/QCoreApplicationType.cpp
+index b89978d90e61d9291e7705bc8e299c1899ab2d8f..d14929a3af489bca5c4434bae0e60504fba8dfe8 100644
+--- a/src/lib/mu/MuQt6/QCoreApplicationType.cpp
++++ b/src/lib/mu/MuQt6/QCoreApplicationType.cpp
+@@ -517,6 +517,25 @@ namespace Mu
+ 
+     static NODE_IMPLEMENTATION(_n_startingUp0, bool) { NODE_RETURN(qt_QCoreApplication_startingUp_bool(NODE_THREAD)); }
+ 
++    // Expose Qt's UTF-8 translation API to Mu UI scripts. Internal RV menu
++    // identifiers stay untranslated; callers opt in for display captions only.
++    Pointer qt_QCoreApplication_translate_string_string_string_string_int(
++        Mu::Thread& NODE_THREAD, Pointer context, Pointer source, Pointer comment, int n)
++    {
++        MuLangContext* c = static_cast<MuLangContext*>(NODE_THREAD.context());
++        const QByteArray contextUtf8 = qstring(context).toUtf8();
++        const QByteArray sourceUtf8 = qstring(source).toUtf8();
++        const QByteArray commentUtf8 = qstring(comment).toUtf8();
++        return makestring(c, QCoreApplication::translate(contextUtf8.constData(), sourceUtf8.constData(),
++                          commentUtf8.isEmpty() ? nullptr : commentUtf8.constData(), n));
++    }
++
++    static NODE_IMPLEMENTATION(_n_translate0, Pointer)
++    {
++        NODE_RETURN(qt_QCoreApplication_translate_string_string_string_string_int(
++            NODE_THREAD, NODE_ARG(0, Pointer), NODE_ARG(1, Pointer), NODE_ARG(2, Pointer), NODE_ARG(3, int)));
++    }
++
+     static NODE_IMPLEMENTATION(_n_testAttribute0, bool)
+     {
+         NODE_RETURN(qt_QCoreApplication_testAttribute_bool_int(NODE_THREAD, NODE_ARG(0, int)));
+@@ -637,8 +656,10 @@ namespace Mu
+             new Function(c, "startingUp", _n_startingUp0, None, Compiled, qt_QCoreApplication_startingUp_bool, Return, "bool", End),
+             new Function(c, "testAttribute", _n_testAttribute0, None, Compiled, qt_QCoreApplication_testAttribute_bool_int, Return, "bool",
+                          Parameters, new Param(c, "attribute", "int"), End),
+-            // MISSING: translate (string; "const char *" context, "const char
+-            // *" sourceText, "const char *" disambiguation, int n)
++            new Function(c, "translate", _n_translate0, None, Compiled,
++                         qt_QCoreApplication_translate_string_string_string_string_int, Return, "string", Parameters,
++                         new Param(c, "context", "string"), new Param(c, "sourceText", "string"),
++                         new Param(c, "disambiguation", "string", Value(Pointer(0))), new Param(c, "n", "int", Value(-1)), End),
+             EndArguments);
+         globalScope()->addSymbols(EndArguments);
+         scope()->addSymbols(EndArguments);
+diff --git a/src/lib/mu/MuQt6/qtModule.cpp b/src/lib/mu/MuQt6/qtModule.cpp
+index d4fe44fdd676fb5a61f016e91df5f6646ef09673..1082d167f5404baf7942932b93a8bdf6fad0334e 100644
+--- a/src/lib/mu/MuQt6/qtModule.cpp
++++ b/src/lib/mu/MuQt6/qtModule.cpp
+@@ -282,6 +282,7 @@ namespace Mu
+         QWidget* parent = object<QWidget>(NODE_ARG_OBJECT(1, ClassInstance));
+ 
+         QUiLoader loader;
++        loader.setTranslationEnabled(true);
+         QFile file(filename->c_str());
+         file.open(QFile::ReadOnly);
+         QWidget* w = loader.load(&file, parent);
+diff --git a/src/lib/ui/TwkGLText/TwkGLText.cpp b/src/lib/ui/TwkGLText/TwkGLText.cpp
+index f5d17c8d00641fb11d148ffbe4cfdc27ae5125d0..aa0787f27edf53eb756ca1d7ed6a708c067c214a 100644
+--- a/src/lib/ui/TwkGLText/TwkGLText.cpp
++++ b/src/lib/ui/TwkGLText/TwkGLText.cpp
+@@ -33,6 +33,7 @@
+ #include <stl_ext/string_algo.h>
+ #include <TwkGLText/defaultFont.h>
+ #include <iterator>
++#include <mutex>
+ #include <pthread.h>
+ 
+ #ifdef WIN32
+@@ -90,6 +91,47 @@ namespace TwkGLText
+     static bool usePixmaps = false;
+     static pthread_once_t threadInit = PTHREAD_ONCE_INIT;
+     static pthread_key_t threadKey;
++    static std::mutex interfaceFontMutex;
++    static std::string interfaceFontPath;
++
++    bool GLtext::setInterfaceFontFile(const char* fontName)
++    {
++        if (!fontName)
++            return false;
++        const std::string path = TwkUtil::pathConform(fontName);
++        if (!path.empty())
++        {
++            FT_Library library = nullptr;
++            if (FT_Init_FreeType(&library))
++                return false;
++            FT_Face face = nullptr;
++            bool valid = FT_New_Face(library, path.c_str(), 0, &face) == 0;
++            if (valid)
++            {
++                valid = FT_Select_Charmap(face, FT_ENCODING_UNICODE) == 0;
++                // Validate real glyph coverage in collection face zero, which
++                // is also the face index used by FTGL's file constructor.
++                const FT_ULong required[] = {0x4E2D, 0x6587, 0x9ED8, 0x8BA4,
++                                             0x5E8F, 0x5217, 0x7A7A, 0x56FE,
++                                             0x50CF, 0x4FE1, 0x606F};
++                for (const FT_ULong character : required)
++                    valid = valid && FT_Get_Char_Index(face, character) != 0;
++                FT_Done_Face(face);
++            }
++            FT_Done_FreeType(library);
++            if (!valid)
++                return false;
++        }
++        std::lock_guard<std::mutex> lock(interfaceFontMutex);
++        interfaceFontPath = path;
++        return true;
++    }
++
++    std::string GLtext::interfaceFontFile()
++    {
++        std::lock_guard<std::mutex> lock(interfaceFontMutex);
++        return interfaceFontPath;
++    }
+ 
+     static void thread_once(void)
+     {
+@@ -115,6 +157,48 @@ namespace TwkGLText
+             return new FTTextureFont(name);
+     }
+ 
++    std::string GLtext::fontFile()
++    {
++        return static_cast<GLTextContext*>(getContext())->fontName;
++    }
++
++    InterfaceFontScope::InterfaceFontScope()
++        : m_context(nullptr)
++        , m_size(0)
++    {
++        const std::string path = GLtext::interfaceFontFile();
++        if (path.empty())
++            return;
++
++        GLTextContext* ctx = static_cast<GLTextContext*>(GLtext::getContext());
++        // Respect a font explicitly selected by a user, annotation or plugin.
++        if (!ctx->fontName.empty())
++            return;
++        m_fontName = ctx->fontName;
++        m_size = ctx->size;
++        m_context = ctx;
++        try
++        {
++            GLtext::init(path.c_str());
++        }
++        catch (...)
++        {
++            ctx->fontName.swap(m_fontName);
++            ctx->size = m_size;
++            m_context = nullptr;
++            throw;
++        }
++    }
++
++    InterfaceFontScope::~InterfaceFontScope() noexcept
++    {
++        if (GLTextContext* ctx = static_cast<GLTextContext*>(m_context))
++        {
++            ctx->fontName.swap(m_fontName);
++            ctx->size = m_size;
++        }
++    }
++
+     Context GLtext::getContext()
+     {
+         if (Context existing_ctx = pthread_getspecific(threadKey))
+@@ -147,7 +231,7 @@ namespace TwkGLText
+         if ((*ctx->fonts[ctx->fontName]).size() <= ctx->size)
+             (*ctx->fonts[ctx->fontName]).resize(ctx->size + 1);
+         if (!(*ctx->fonts[ctx->fontName])[ctx->size])
+-            (*ctx->fonts[ctx->fontName])[ctx->size] = newFont(default_font, 67548);
++            (*ctx->fonts[ctx->fontName])[ctx->size] = newFont(default_font, default_fontSize);
+         (*ctx->fonts[ctx->fontName])[ctx->size]->FaceSize(ctx->size);
+         ctx->initialized = true;
+ 
+@@ -193,7 +277,7 @@ namespace TwkGLText
+             }
+             if (!(*ctx->fonts[ctx->fontName])[ctx->size])
+             {
+-                (*ctx->fonts[ctx->fontName])[ctx->size] = newFont(default_font, 67548);
++                (*ctx->fonts[ctx->fontName])[ctx->size] = newFont(default_font, default_fontSize);
+                 (*ctx->fonts[ctx->fontName])[ctx->size]->FaceSize(ctx->size);
+             }
+             ctx->initialized = true;
+diff --git a/src/lib/ui/TwkGLText/TwkGLText/TwkGLText.h b/src/lib/ui/TwkGLText/TwkGLText/TwkGLText.h
+index e8184bf9a61d6b0bb7c2a91dcfed4b4ea388a7ce..b8ff1cf0f29c3a8c7ab3cd4a67b71413ef30d8df 100644
+--- a/src/lib/ui/TwkGLText/TwkGLText/TwkGLText.h
++++ b/src/lib/ui/TwkGLText/TwkGLText/TwkGLText.h
+@@ -50,6 +50,13 @@ namespace TwkGLText
+ 
+         static void clear();
+ 
++        // Optional CJK font for built-in interface text only. Normal init(),
++        // newContext(), annotations and media rendering retain their font.
++        // Validates Unicode coverage without creating OpenGL resources.
++        static bool setInterfaceFontFile(const char* fontName);
++        static std::string interfaceFontFile();
++        static std::string fontFile();
++
+         static void init();
+         static void init(const char* fontName);
+         static void init(const unsigned char* fontData, int fontDataSize);
+@@ -83,6 +90,22 @@ namespace TwkGLText
+         static float globalDescenderHeight();
+     };
+ 
++    // A short native text-operation scope. Do not keep this active while
++    // calling user Mu/plugin code: interface language must not affect media.
++    class InterfaceFontScope
++    {
++    public:
++        InterfaceFontScope();
++        ~InterfaceFontScope() noexcept;
++        InterfaceFontScope(const InterfaceFontScope&) = delete;
++        InterfaceFontScope& operator=(const InterfaceFontScope&) = delete;
++
++    private:
++        Context m_context;
++        std::string m_fontName;
++        int m_size;
++    };
++
+ } // namespace TwkGLText
+ 
+ #endif // End #ifdef __TWKGRAPHTEXT_H__
+diff --git a/src/plugins/rv-packages/annotate/annotate_mode.mu b/src/plugins/rv-packages/annotate/annotate_mode.mu
+index 368064f1e535f71703df0f1e12d857db28ea5270..07d7312eedf64f0ba8e0f4655f8b3c7b3350116f 100644
+--- a/src/plugins/rv-packages/annotate/annotate_mode.mu
++++ b/src/plugins/rv-packages/annotate/annotate_mode.mu
+@@ -2893,8 +2893,8 @@ class: AnnotateMinorMode : MinorMode
+     method: saveAnnotationSlot (void;)
+     {
+         let (text, ok) = QInputDialog.getText(mainWindowWidget(),
+-                                              "Annotation Title",
+-                                              "Title:",
++                                              qt.QCoreApplication.translate("RvMenu", "Annotation Title"),
++                                              qt.QCoreApplication.translate("RvMenu", "Title:"),
+                                               QLineEdit.Normal,
+                                               "annotation",
+                                               Qt.Dialog);
+@@ -3098,7 +3098,7 @@ class: AnnotateMinorMode : MinorMode
+                 
+                 if (enabled)
+                 {
+-                    tool.action.setToolTip(tool.defaultTooltip);
++                    tool.action.setToolTip(qt.QCoreApplication.translate("RvMenu", tool.defaultTooltip));
+                 }
+                 else
+                 {
+@@ -3152,7 +3152,7 @@ class: AnnotateMinorMode : MinorMode
+         _autoSave          = true;
+         _hideDrawPane      = 0;
+         _userSelectedNode   = "";
+-        _disabledTooltipMessage = "This tool is currently unavailable";
++        _disabledTooltipMessage = qt.QCoreApplication.translate("RvMenu", "This tool is currently unavailable");
+         _skipConfirmations = system.getenv("RV_SKIP_CONFIRMATIONS", nil) neq nil;
+         _shapeActive       = false;
+         _shapeAnchor       = Point(0.0, 0.0);
+@@ -3218,7 +3218,7 @@ class: AnnotateMinorMode : MinorMode
+         _selectDrawMode = DrawMode { "Select",
+                                      "select",
+                                      _disabledButton,
+-                                     g.addAction(auxIcon("arrow_64x64.png"), "Select/Scrub Time (Draw Disabled)"),
++                                     g.addAction(auxIcon("arrow_64x64.png"), qt.QCoreApplication.translate("RvMenu", "Select/Scrub Time (Draw Disabled)")),
+                                      "",
+                                      CursorDefault,
+                                      0,
+@@ -3241,7 +3241,7 @@ class: AnnotateMinorMode : MinorMode
+         _dropperDrawMode = DrawMode { "Sample Color",
+                                       "sample",
+                                      _dropperButton,
+-                                     g.addAction(auxIcon("dropper_48x48.png"), "Sample Color"),
++                                     g.addAction(auxIcon("dropper_48x48.png"), qt.QCoreApplication.translate("RvMenu", "Sample Color")),
+                                      "dropper",
+                                      Qt.CrossCursor,
+                                      0,
+@@ -3264,7 +3264,7 @@ class: AnnotateMinorMode : MinorMode
+         _textDrawMode  = DrawMode { "Text",
+                                       "text",
+                                      _textButton,
+-                                     g.addAction(auxIcon("A_48x48.png"), "Text"),
++                                     g.addAction(auxIcon("A_48x48.png"), qt.QCoreApplication.translate("RvMenu", "Text")),
+                                      "textplacement",
+                                      Qt.IBeamCursor,
+                                      48.0 / 1080.0,
+@@ -3290,7 +3290,7 @@ class: AnnotateMinorMode : MinorMode
+         _penDrawMode = DrawMode { "Pen",
+                                   "pen",
+                                   _circleBrushButton,
+-                                  g.addAction(auxIcon("circle_64x64.png"), "Pen"),
++                                  g.addAction(auxIcon("circle_64x64.png"), qt.QCoreApplication.translate("RvMenu", "Pen")),
+                                   "",
+                                   Qt.CrossCursor,
+                                   0.003,
+@@ -3314,7 +3314,7 @@ class: AnnotateMinorMode : MinorMode
+         _airBrushDrawMode = DrawMode { "Air Brush",
+                                        "airbrush",
+                                        _gaussBrushButton,
+-                                       g.addAction(auxIcon("gauss_64x64.png"), "Air Brush"),
++                                       g.addAction(auxIcon("gauss_64x64.png"), qt.QCoreApplication.translate("RvMenu", "Air Brush")),
+                                        "",
+                                        Qt.CrossCursor,
+                                        0.025,
+@@ -3339,7 +3339,7 @@ class: AnnotateMinorMode : MinorMode
+                                         "harderase",
+                                         _hardEraseButton,
+                                         g.addAction(auxIcon("harderase_64x64.png"),
+-                                                    "Hard Erase"),
++                                                    qt.QCoreApplication.translate("RvMenu", "Hard Erase")),
+                                         "",
+                                         Qt.CrossCursor,
+                                         0.003,
+@@ -3363,7 +3363,7 @@ class: AnnotateMinorMode : MinorMode
+                                         "airerase",
+                                         _softEraseButton,
+                                         g.addAction(auxIcon("softerase_64x64.png"),
+-                                                    "Air Brush Erase"),
++                                                    qt.QCoreApplication.translate("RvMenu", "Air Brush Erase")),
+                                         "",
+                                         Qt.CrossCursor,
+                                         0.025,
+@@ -3386,7 +3386,7 @@ class: AnnotateMinorMode : MinorMode
+         _dodgeDrawMode     = DrawMode { "Dodge",
+                                         "dodge",
+                                         _dodgeButton,
+-                                        g.addAction(auxIcon("dodge_64x64.png"), "Dodge"),
++                                        g.addAction(auxIcon("dodge_64x64.png"), qt.QCoreApplication.translate("RvMenu", "Dodge")),
+                                         "",
+                                         Qt.CrossCursor,
+                                         1.0,
+@@ -3409,7 +3409,7 @@ class: AnnotateMinorMode : MinorMode
+         _burnDrawMode     = DrawMode { "Burn",
+                                         "burn",
+                                         _burnButton,
+-                                        g.addAction(auxIcon("burn_64x64.png"), "Burn"),
++                                        g.addAction(auxIcon("burn_64x64.png"), qt.QCoreApplication.translate("RvMenu", "Burn")),
+                                         "",
+                                         Qt.CrossCursor,
+                                         1.0,
+@@ -3437,7 +3437,7 @@ class: AnnotateMinorMode : MinorMode
+         _rectDrawMode = DrawMode { "Rectangle",
+                                    "rect",
+                                    _rectButton,
+-                                   g.addAction(auxIcon("rectangle.svg"), "Rect"),
++                                   g.addAction(auxIcon("rectangle.svg"), qt.QCoreApplication.translate("RvMenu", "Rect")),
+                                    "shape_rect",
+                                    Qt.CrossCursor,
+                                    0.003,
+@@ -3456,7 +3456,7 @@ class: AnnotateMinorMode : MinorMode
+         _ellipseDrawMode = DrawMode { "Ellipse",
+                                       "ellipse",
+                                       _ellipseButton,
+-                                      g.addAction(auxIcon("ellipse.svg"), "Ell"),
++                                      g.addAction(auxIcon("ellipse.svg"), qt.QCoreApplication.translate("RvMenu", "Ell")),
+                                       "shape_ellipse",
+                                       Qt.CrossCursor,
+                                       0.003,
+@@ -3475,7 +3475,7 @@ class: AnnotateMinorMode : MinorMode
+         _arrowDrawMode = DrawMode { "Arrow",
+                                     "arrow",
+                                     _arrowButton,
+-                                    g.addAction(auxIcon("shape_arrow.svg"), "Arr"),
++                                    g.addAction(auxIcon("shape_arrow.svg"), qt.QCoreApplication.translate("RvMenu", "Arr")),
+                                     "shape_arrow",
+                                     Qt.CrossCursor,
+                                     0.003,
+@@ -3494,7 +3494,7 @@ class: AnnotateMinorMode : MinorMode
+         _lineDrawMode = DrawMode { "Line",
+                                    "line",
+                                    _lineButton,
+-                                   g.addAction(auxIcon("line.svg"), "Line"),
++                                   g.addAction(auxIcon("line.svg"), qt.QCoreApplication.translate("RvMenu", "Line")),
+                                    "shape_line",
+                                    Qt.CrossCursor,
+                                    0.002,
+@@ -3582,9 +3582,9 @@ class: AnnotateMinorMode : MinorMode
+         connect(_colorButton, QPushButton.clicked, chooseColorSlot);
+         connect(_colorDialog, QColorDialog.colorSelected, newColorSlot(,true,true));
+ 
+-        _undoAct = QAction(auxIcon("undo_64x64.png"), "Undo", m);
+-        _redoAct = QAction(auxIcon("redo_64x64.png"), "Redo", m);
+-        _clearAct = QAction(auxIcon("clear_64x64.png"), "Clear Frame", m);
++        _undoAct = QAction(auxIcon("undo_64x64.png"), qt.QCoreApplication.translate("RvMenu", "Undo"), m);
++        _redoAct = QAction(auxIcon("redo_64x64.png"), qt.QCoreApplication.translate("RvMenu", "Redo"), m);
++        _clearAct = QAction(auxIcon("clear_64x64.png"), qt.QCoreApplication.translate("RvMenu", "Clear Frame"), m);
+ 
+         // We use QKeySequence::StandardKey instead of the string constructor for better MacOS support
+         _undoAct.setShortcut(QKeySequence(QKeySequence.Undo));
+@@ -3600,9 +3600,9 @@ class: AnnotateMinorMode : MinorMode
+         _redoButton.setDefaultAction(_redoAct);
+         _clearButton.setDefaultAction(_clearAct);
+ 
+-        let clearMenu = QMenu("Clear Frame", _clearButton);
+-        _clearFrameAct = clearMenu.addAction("Clear Frame");
+-        _clearAllFramesAct = clearMenu.addAction("Clear All Frames on Timeline");
++        let clearMenu = QMenu(qt.QCoreApplication.translate("RvMenu", "Clear Frame"), _clearButton);
++        _clearFrameAct = clearMenu.addAction(qt.QCoreApplication.translate("RvMenu", "Clear Frame"));
++        _clearAllFramesAct = clearMenu.addAction(qt.QCoreApplication.translate("RvMenu", "Clear All Frames on Timeline"));
+ 
+         _clearButton.setMenu(clearMenu);
+         _clearButton.setPopupMode(QToolButton.InstantPopup);
+diff --git a/src/plugins/rv-packages/doc_browser/doc_browser.mu b/src/plugins/rv-packages/doc_browser/doc_browser.mu
+index 8695ca527d6e4a47748ae31933722dfc5ee24831..2ad8357cc37878b1b703cd65ef1c24f6877a43d2 100644
+--- a/src/plugins/rv-packages/doc_browser/doc_browser.mu
++++ b/src/plugins/rv-packages/doc_browser/doc_browser.mu
+@@ -1728,8 +1728,8 @@ class: DocBrowserMode : MinorMode
+         _window.setObjectName("docBrowser");
+ 
+         let toolbar       = _window.addToolBar("docBrowserToolbar"),
+-            backAction    = QAction(QIcon(":images/back_out.png"), "Back", _window),
+-            forwardAction = QAction(QIcon(":images/forwd_out.png"), "Forward", _window),
++            backAction    = QAction(QIcon(":images/back_out.png"), qt.QCoreApplication.translate("RvMenu", "Back"), _window),
++            forwardAction = QAction(QIcon(":images/forwd_out.png"), qt.QCoreApplication.translate("RvMenu", "Forward"), _window),
+             backButton    = QToolButton(_window),
+             forwardButton = QToolButton(_window);
+ 
+@@ -1747,7 +1747,7 @@ class: DocBrowserMode : MinorMode
+         toolbar.addWidget(forwardButton);
+ 
+         _searchWidget = QWidget(_window, 0); 
+-        _searchLabel = QLabel("Search:", _searchWidget, 0);
++        _searchLabel = QLabel(qt.QCoreApplication.translate("RvMenu", "Search:"), _searchWidget, 0);
+         _searchEdit = QLineEdit(_searchWidget);
+         _searchLayout = QHBoxLayout(_searchWidget);
+         _searchWidget.setMinimumWidth(120);
+diff --git a/src/plugins/rv-packages/multiple_source_media_rep/multiple_source_media_rep.py b/src/plugins/rv-packages/multiple_source_media_rep/multiple_source_media_rep.py
+index 7f78f7004e92fefb628baa6932dfd284529346cb..0c223c4e9a5840140c17091ef41884a8cd51090b 100755
+--- a/src/plugins/rv-packages/multiple_source_media_rep/multiple_source_media_rep.py
++++ b/src/plugins/rv-packages/multiple_source_media_rep/multiple_source_media_rep.py
+@@ -1,3 +1,4 @@
++from rv.qtutils import translate_ui as _rv_tr
+ # Copyright (c) 2021 Autodesk.
+ #
+ # CONFIDENTIAL AND PROPRIETARY
+@@ -285,12 +286,12 @@ class MultipleSourceMediaRepMode(rvtypes.MinorMode):
+ 
+         playback_style_action = None
+         for action in self._bottomToolBar.actions():
+-            if action.toolTip() == QtCore.QObject().tr("Select playback style"):
++            if action.objectName() == "rvPlaybackStyleAction":
+                 playback_style_action = action
+ 
+         # Dropdown menu for the media reps.
+         self._media_representation_btn = QtWidgets.QToolButton(self._bottomToolBar)
+-        self._media_representation_btn.setToolTip("Select media playback type")
++        self._media_representation_btn.setToolTip(_rv_tr("Select media playback type"))
+         self._media_representation_btn.setProperty("tbstyle", "solo_menu")
+         self._media_representation_btn.setStyleSheet("color: gray")
+         self._media_representation_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+@@ -363,7 +364,7 @@ class MultipleSourceMediaRepMode(rvtypes.MinorMode):
+             return
+ 
+         # Menu title.
+-        title = QtGui.QAction("Media Playback", menu)
++        title = QtGui.QAction(_rv_tr("Media Playback"), menu)
+         title.setEnabled(False)
+         menu.addAction(title)
+         menu.addSeparator()
+diff --git a/src/plugins/rv-packages/session_manager/FolderGroup_edit_mode.mu b/src/plugins/rv-packages/session_manager/FolderGroup_edit_mode.mu
+index f8ffb54f018b52ff3a1a2d8dfb96c9329115250e..9bfdb099c53961247c9196be2e7d2826f837f1b2 100644
+--- a/src/plugins/rv-packages/session_manager/FolderGroup_edit_mode.mu
++++ b/src/plugins/rv-packages/session_manager/FolderGroup_edit_mode.mu
+@@ -106,9 +106,9 @@ class: FolderGroupEditMode : MinorMode
+                 _viewTypeCombo = _ui.findChild("viewTypeCombo");
+ 
+                 _viewTypeCombo.clear();
+-                _viewTypeCombo.addItem("Switch", QVariant("switch"));
+-                _viewTypeCombo.addItem("Layout", QVariant("layout"));
+-                _viewTypeCombo.addItem("Stack", QVariant("stack"));
++                _viewTypeCombo.addItem(qt.QCoreApplication.translate("RvMenu", "Switch"), QVariant("switch"));
++                _viewTypeCombo.addItem(qt.QCoreApplication.translate("RvMenu", "Layout"), QVariant("layout"));
++                _viewTypeCombo.addItem(qt.QCoreApplication.translate("RvMenu", "Stack"), QVariant("stack"));
+ 
+                 connect(_viewTypeCombo, QComboBox.currentIndexChanged, setViewType);
+                 manager.addEditor("Folder View", _ui);
+diff --git a/src/plugins/rv-packages/session_manager/Stack_edit_mode.mu b/src/plugins/rv-packages/session_manager/Stack_edit_mode.mu
+index a4571d7d02d78366cb5ee3756c9ddbef6067a73f..1cfdf5f3114b5e541a4d33a7ef7f04a8aa5add3d 100644
+--- a/src/plugins/rv-packages/session_manager/Stack_edit_mode.mu
++++ b/src/plugins/rv-packages/session_manager/Stack_edit_mode.mu
+@@ -66,9 +66,9 @@ class: StackEditMode : MinorMode
+             _interactiveSizeCheckBox.setCheckState(if isize == 0 then Qt.Unchecked else Qt.Checked);
+ 
+             _chosenAudioInputCombo.clear();
+-            _chosenAudioInputCombo.addItem("All Inputs Mixed", QVariant(".all."));
+-            _chosenAudioInputCombo.addItem("First Input Only", QVariant(".first."));
+-            _chosenAudioInputCombo.addItem("First Visible Input", QVariant(".topmost."));
++            _chosenAudioInputCombo.addItem(qt.QCoreApplication.translate("RvMenu", "All Inputs Mixed"), QVariant(".all."));
++            _chosenAudioInputCombo.addItem(qt.QCoreApplication.translate("RvMenu", "First Input Only"), QVariant(".first."));
++            _chosenAudioInputCombo.addItem(qt.QCoreApplication.translate("RvMenu", "First Visible Input"), QVariant(".topmost."));
+ 
+             let chosenIndex = 0,
+                 inputs = nodeConnections(viewNode(), false)._0;
+diff --git a/src/plugins/rv-packages/session_manager/session_manager.mu.in b/src/plugins/rv-packages/session_manager/session_manager.mu.in
+index 5f0df62c13c18be0e6dbc685a0a02cdc44d82861..82cc5f1a1997bedbd1c2f264015ff035294c1a96 100755
+--- a/src/plugins/rv-packages/session_manager/session_manager.mu.in
++++ b/src/plugins/rv-packages/session_manager/session_manager.mu.in
+@@ -3278,19 +3278,19 @@ class: SessionManagerMode : MinorMode
+ 
+         m.addDockWidget(Qt.LeftDockWidgetArea, _dockWidget);
+ 
+-        let addAction          = QAction(auxIcon("add_48x48.png", true), "Create View", _addButton),
+-            folderAction       = QAction(auxIcon("foldr_48x48.png", true), "Create Folder", _folderButton),
+-            deleteAction       = QAction(auxIcon("trash_48x48.png", true), "Delete View", _deleteButton),
+-            configAction       = QAction(auxIcon("confg_48x48.png", true), "Configure", _configButton),
+-            editInfoAction     = QAction(auxIcon("sinfo_48x48.png", true), "Edit View Info", _editViewInfoButton),
+-            orderUpAction      = QAction(auxIcon("up_48x48.png", true), "Move Input Higher in List", _orderUpButton),
+-            orderDownAction    = QAction(auxIcon("down_48x48.png", true), "Move Input Lower in List", _orderDownButton),
+-            sortAscAction      = QAction("A-Z", _sortAscButton),
+-            sortDescAction     = QAction("Z-A", _sortDescButton),
+-            inputsDeleteAction = QAction(auxIcon("trash_48x48.png", true), "Delete Input", _inputsDeleteButton),
+-            prevViewAction     = QAction(auxIcon("back_48x48.png", true), "Previous View", _prevViewButton),
+-            nextViewAction     = QAction(auxIcon("forwd_48x48.png", true), "Next View", _nextViewButton),
+-            homeAction         = QAction(auxIcon("home_48x48.png", true), "Select Current View", _homeButton);
++        let addAction          = QAction(auxIcon("add_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Create View"), _addButton),
++            folderAction       = QAction(auxIcon("foldr_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Create Folder"), _folderButton),
++            deleteAction       = QAction(auxIcon("trash_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Delete View"), _deleteButton),
++            configAction       = QAction(auxIcon("confg_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Configure"), _configButton),
++            editInfoAction     = QAction(auxIcon("sinfo_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Edit View Info"), _editViewInfoButton),
++            orderUpAction      = QAction(auxIcon("up_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Move Input Higher in List"), _orderUpButton),
++            orderDownAction    = QAction(auxIcon("down_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Move Input Lower in List"), _orderDownButton),
++            sortAscAction      = QAction(qt.QCoreApplication.translate("RvMenu", "A-Z"), _sortAscButton),
++            sortDescAction     = QAction(qt.QCoreApplication.translate("RvMenu", "Z-A"), _sortDescButton),
++            inputsDeleteAction = QAction(auxIcon("trash_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Delete Input"), _inputsDeleteButton),
++            prevViewAction     = QAction(auxIcon("back_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Previous View"), _prevViewButton),
++            nextViewAction     = QAction(auxIcon("forwd_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Next View"), _nextViewButton),
++            homeAction         = QAction(auxIcon("home_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Select Current View"), _homeButton);
+ 
+         //
+         //  Cache all the icons ahead of time (this was seriously
+@@ -3345,13 +3345,13 @@ class: SessionManagerMode : MinorMode
+         _nextViewButton.setDefaultAction(nextViewAction);
+         _homeButton.setDefaultAction(homeAction);
+ 
+-        let addMenu          = QMenu("New Viewable", _addButton),
+-            addSequence      = addMenu.addAction(auxIcon("playlist_48x48.png", true), "Sequence"),
+-            addStack         = addMenu.addAction(auxIcon("photoalbum_48x48.png", true), "Stack"),
+-            addSwitch        = addMenu.addAction(auxIcon("shuffle_48x48.png", true), "Switch"),
+-            addFolder        = addMenu.addAction(auxIcon("foldr_48x48.png", true), "Folder"),
+-            addLayout        = addMenu.addAction(auxIcon("lgicn_48x48.png", true), "Layout"),
+-            addRetime        = addMenu.addAction(auxIcon("tempo_48x48.png", true), "Retime");
++        let addMenu          = QMenu(qt.QCoreApplication.translate("RvMenu", "New Viewable"), _addButton),
++            addSequence      = addMenu.addAction(auxIcon("playlist_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Sequence")),
++            addStack         = addMenu.addAction(auxIcon("photoalbum_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Stack")),
++            addSwitch        = addMenu.addAction(auxIcon("shuffle_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Switch")),
++            addFolder        = addMenu.addAction(auxIcon("foldr_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Folder")),
++            addLayout        = addMenu.addAction(auxIcon("lgicn_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Layout")),
++            addRetime        = addMenu.addAction(auxIcon("tempo_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Retime"));
+ 
+         QAction addColorize  = nil;
+         QAction addOCIO      = nil;
+@@ -3363,22 +3363,22 @@ class: SessionManagerMode : MinorMode
+ 	//
+         if (true || shortAppName() == "rvsdi" || shortAppName() == "rvx")
+         {
+-            addColorize      = addMenu.addAction(auxIcon("new_48x48.png", true), "Color");
+-            addOCIO          = addMenu.addAction(auxIcon("new_48x48.png", true), "OCIO");
++            addColorize      = addMenu.addAction(auxIcon("new_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Color"));
++            addOCIO          = addMenu.addAction(auxIcon("new_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "OCIO"));
+             if (system.getenv("RV_ENABLE_DYNAMIC_NODE", nil) neq nil)
+             {
+-                addDynamic   = addMenu.addAction(auxIcon("new_48x48.png", true), "Dynamic");
++                addDynamic   = addMenu.addAction(auxIcon("new_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Dynamic"));
+             }
+-            addUserNode      = addMenu.addAction(auxIcon("new_48x48.png", true), "New Node by Type...");
++            addUserNode      = addMenu.addAction(auxIcon("new_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "New Node by Type..."));
+         }
+ 
+         let _                = addMenu.addSeparator(),
+-            addSRGBCChart    = addMenu.addAction(auxIcon("colorchart_48x48.png", true), "SRGB Color Chart..."),
+-            addACESCChart   = addMenu.addAction(auxIcon("colorchart_48x48.png", true), "ACES Color Chart..."),
+-            addCBars         = addMenu.addAction(auxIcon("ntscbars_48x48.png", true), "Color Bars..."),
+-            addBlack         = addMenu.addAction(auxIcon("video_48x48.png", true), "Black..."),
+-            addColor         = addMenu.addAction(auxIcon("video_48x48.png", true), "Color..."),
+-            addBlank         = addMenu.addAction(auxIcon("video_48x48.png", true), "Blank...");
++            addSRGBCChart    = addMenu.addAction(auxIcon("colorchart_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "SRGB Color Chart...")),
++            addACESCChart   = addMenu.addAction(auxIcon("colorchart_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "ACES Color Chart...")),
++            addCBars         = addMenu.addAction(auxIcon("ntscbars_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Color Bars...")),
++            addBlack         = addMenu.addAction(auxIcon("video_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Black...")),
++            addColor         = addMenu.addAction(auxIcon("video_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Color...")),
++            addBlank         = addMenu.addAction(auxIcon("video_48x48.png", true), qt.QCoreApplication.translate("RvMenu", "Blank..."));
+ 
+         let menuActions      = [(addStack, "RVStackGroup"),
+                                 (addFolder, "RVFolderGroup"),
+@@ -3438,10 +3438,10 @@ class: SessionManagerMode : MinorMode
+         _addButton.setArrowType(Qt.NoArrow);
+         _createMenu = addMenu;
+ 
+-        let folderMenu       = QMenu("New Folder", _folderButton),
+-            newFolderAction  = folderMenu.addAction("Empty Folder"),
+-            newFolder2Action = folderMenu.addAction("From Selection"),
+-            newFolder3Action = folderMenu.addAction("From Copy of Selection");
++        let folderMenu       = QMenu(qt.QCoreApplication.translate("RvMenu", "New Folder"), _folderButton),
++            newFolderAction  = folderMenu.addAction(qt.QCoreApplication.translate("RvMenu", "Empty Folder")),
++            newFolder2Action = folderMenu.addAction(qt.QCoreApplication.translate("RvMenu", "From Selection")),
++            newFolder3Action = folderMenu.addAction(qt.QCoreApplication.translate("RvMenu", "From Copy of Selection"));
+ 
+         _folderButton.setDefaultAction(folderAction);
+         _folderButton.setMenu(folderMenu);
+@@ -3449,10 +3449,10 @@ class: SessionManagerMode : MinorMode
+         _folderButton.setPopupMode(QToolButton.InstantPopup);
+         _folderMenu = folderMenu;
+ 
+-        let configMenu     = QMenu("Config", _configButton),
+-            configAlwaysOn = configMenu.addAction("Always Show at Start Up"),
+-            configNeverOn  = configMenu.addAction("Never Show at Start Up"),
+-            configLastOn   = configMenu.addAction("Restore Last State at Start Up"),
++        let configMenu     = QMenu(qt.QCoreApplication.translate("RvMenu", "Config"), _configButton),
++            configAlwaysOn = configMenu.addAction(qt.QCoreApplication.translate("RvMenu", "Always Show at Start Up")),
++            configNeverOn  = configMenu.addAction(qt.QCoreApplication.translate("RvMenu", "Never Show at Start Up")),
++            configLastOn   = configMenu.addAction(qt.QCoreApplication.translate("RvMenu", "Restore Last State at Start Up")),
+             configGroup    = QActionGroup(_configButton);
+ 
+         for_each (a; [configAlwaysOn, configNeverOn, configLastOn])
+@@ -3462,7 +3462,7 @@ class: SessionManagerMode : MinorMode
+         }
+ 
+         let _              = configMenu.addSeparator(),
+-            previewToggle  = configMenu.addAction("Show Source Previews");
++            previewToggle  = configMenu.addAction(qt.QCoreApplication.translate("RvMenu", "Show Source Previews"));
+ 
+         previewToggle.setCheckable(true);
+         previewToggle.setChecked(_previewsEnabled);

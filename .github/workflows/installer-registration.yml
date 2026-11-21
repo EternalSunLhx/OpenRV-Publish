@@ -1,0 +1,85 @@
+name: 安装器打开方式验证 (Manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer-registration:
+    name: Windows Open With registration and diagnostics
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Fetch fixed official source only into disposable diagnostic storage
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: AcademySoftwareFoundation/OpenRV
+          ref: 27db5464a90ca19a9a30d540988ee109ee06bb7e # official v4.0.2
+          path: _release_work/registration-upstream
+          persist-credentials: false
+      - name: Prepare exact upstream icon and GLEW for the registration probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $official = Join-Path $env:GITHUB_WORKSPACE '_release_work/registration-upstream'
+          $upstreamUrl = 'https://github.com/AcademySoftwareFoundation/OpenRV.git'
+          $head = & git -C $official rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $head -cne '27db5464a90ca19a9a30d540988ee109ee06bb7e') { throw 'Unexpected official diagnostic source.' }
+          $tag = & git ls-remote --exit-code --refs $upstreamUrl 'refs/tags/v4.0.2'
+          if ($LASTEXITCODE -ne 0 -or $tag -cne "27db5464a90ca19a9a30d540988ee109ee06bb7e`trefs/tags/v4.0.2") { throw 'Official v4.0.2 tag changed.' }
+          $vendorUrl = & git -C $official config -f .gitmodules --get submodule.src/pub.url
+          if ($LASTEXITCODE -ne 0 -or $vendorUrl -cne 'https://github.com/shotgunsoftware/openrv-pub.git') { throw 'Unexpected vendor source.' }
+          $gitlink = & git -C $official ls-tree HEAD -- src/pub
+          if ($LASTEXITCODE -ne 0 -or $gitlink -cne "160000 commit b738ce25c560c75ea64effeea8fbfa2fda84c582`tsrc/pub") { throw 'Unexpected official vendor gitlink.' }
+          & git -c core.autocrlf=false -C $official submodule update --init --depth=1 src/pub
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch fixed diagnostic vendor.' }
+          $vendor = Join-Path $official 'src/pub'
+          $vendorHead = & git -C $vendor rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $vendorHead -cne 'b738ce25c560c75ea64effeea8fbfa2fda84c582') { throw 'Unexpected diagnostic vendor commit.' }
+          $expected = @{
+            'glew/glew.c' = '717a73999868a9452219511a93d823ebbbc8fd6401404a12b7464a5bc7c90c06'
+            'glew/GL/glew.h' = 'a83079e87ebc6125348aabd1f0353630922a35e9bb3f335a148febd16d831b1d'
+          }
+          foreach ($entry in $expected.GetEnumerator()) {
+            if ((Get-FileHash -LiteralPath (Join-Path $vendor $entry.Key) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $entry.Value) { throw 'Diagnostic GLEW bytes differ.' }
+          }
+          $source = Join-Path $env:GITHUB_WORKSPACE 'src'
+          if (Test-Path -LiteralPath $source) { throw 'Diagnostic source destination must be fresh.' }
+          [void](New-Item -ItemType Directory -Path (Join-Path $source 'pub'),(Join-Path $source 'bin/apps/rv'))
+          Copy-Item -LiteralPath (Join-Path $vendor 'glew') -Destination (Join-Path $source 'pub/glew') -Recurse
+          Copy-Item -LiteralPath (Join-Path $official 'src/bin/apps/rv/RV.ico') -Destination (Join-Path $source 'bin/apps/rv/RV.ico')
+      - name: Ensure pinned native compiler
+        shell: pwsh
+        run: ./ci/localized-release/setup-windows.ps1 -Step MSVC
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          toolset: '14.40.33807'
+          arch: x86_64
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.5.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2019_64
+          dir: '${{ runner.temp }}/openrv-qt'
+          archives: 'd3dcompiler_47 opengl32sw qtbase'
+          aqtversion: '==3.2.*'
+          py7zrversion: '==0.22.*'
+          setup-python: false
+          cache: false
+          install-deps: false
+      - name: Verify hosted Qt and native OpenGL readiness before full builds
+        shell: pwsh
+        run: ./ci/localized-release/with-windows-gl.ps1 -Task Readiness
+      - name: Prepare pinned Inno compiler only
+        shell: pwsh
+        run: ./ci/localized-release/setup-windows.ps1 -Step Inno
+      - name: Install, enumerate actual Shell handlers and uninstall the registration fixture
+        shell: pwsh
+        run: ./ci/localized-release/test-installer-registration.ps1

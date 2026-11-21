@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// Generated from the exact checkout and the validated local release tag.
+#pragma once
+#define RV_LOCALIZED_MAJOR @RV_MAJOR_VERSION@
+#define RV_LOCALIZED_MINOR @RV_MINOR_VERSION@
+#define RV_LOCALIZED_PATCH @RV_REVISION_NUMBER@
+#define RV_LOCALIZED_BUILD_NUMBER @_rv_localized_build_number@ULL
+#define RV_LOCALIZED_NATIVE_VERSION "@CORE_VERSION@"
+#define RV_LOCALIZED_VERSION "@_rv_localized_version@"
+#define RV_LOCALIZED_RELEASE_TAG "@_rv_localized_tag@"

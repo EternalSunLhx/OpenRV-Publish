@@ -1,0 +1,100 @@
+name: Localized Windows Release
+description: Native MSVC CY2025 build, isolated smoke checks, bilingual all-users installer and portable ZIP
+runs:
+  using: composite
+  steps:
+    - name: Select a fresh short CI build directory
+      shell: pwsh
+      run: |
+        if ($env:GITHUB_ACTIONS -ne 'true' -or -not $env:GITHUB_WORKSPACE) { throw 'The short build directory is reserved for GitHub Actions.' }
+        $buildDir = 'D:/b'
+        $buildPath = [IO.Path]::GetFullPath($buildDir)
+        $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\')
+        if ($buildPath -eq $workspace -or $buildPath.StartsWith($workspace + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'The CI build directory must be outside the source checkout.' }
+        if (Test-Path -LiteralPath $buildPath) { throw 'The short CI build directory already exists; use a fresh runner.' }
+        "OPENRV_BUILD_DIR=$buildDir" | Out-File -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Append
+    - name: Install pinned MSVC toolset if needed
+      shell: pwsh
+      run: ./ci/localized-release/setup-windows.ps1 -Step MSVC
+    - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      with:
+        toolset: '14.40.33807'
+        arch: x86_64
+    - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+      with:
+        msystem: MINGW64
+        path-type: inherit
+        update: true
+        cache: false
+        install: >-
+          mingw-w64-x86_64-autotools mingw-w64-x86_64-libarchive
+          mingw-w64-x86_64-make mingw-w64-x86_64-meson mingw-w64-x86_64-pkgconf
+          autoconf automake bison flex git libtool nasm patch unzip zip
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: '3.11'
+    - uses: jwlawson/actions-setup-cmake@802fa1a2c4e212495c05bf94dba2704a92a472be # v2
+      with:
+        cmake-version: '3.31.6'
+    - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+      with:
+        version: '6.5.3'
+        host: windows
+        target: desktop
+        arch: win64_msvc2019_64
+        dir: '${{ runner.temp }}/openrv-qt'
+        modules: 'qt5compat qtimageformats qtmultimedia qtpositioning qtserialport qtquick3d qtquicktimeline qtshadertools qtwebchannel qtwebengine qtwebsockets'
+        archives: 'd3dcompiler_47 opengl32sw qtbase qtdeclarative qtsvg qttools qttranslations'
+        aqtversion: '==3.2.*'
+        py7zrversion: '==0.22.*'
+        setup-python: false
+        cache: false
+        install-deps: false
+    - name: Verify Qt SerialPort native dependency is installed
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $serialPort = Get-Item -LiteralPath (Join-Path $env:QT_ROOT_DIR 'bin/Qt6SerialPort.dll')
+        if ($serialPort.PSIsContainer -or $serialPort.Length -le 0) { throw 'Qt SerialPort runtime dependency is missing or empty.' }
+    - name: Verify hosted Qt and native OpenGL readiness before cold dependencies
+      shell: pwsh
+      run: ./ci/localized-release/with-windows-gl.ps1 -Task Readiness
+    - name: Install native build helpers and pinned Inno Setup
+      shell: pwsh
+      run: ./ci/localized-release/setup-windows.ps1 -Step Helpers
+    - name: Verify installer Open With registration before compiling dependencies
+      shell: pwsh
+      run: ./ci/localized-release/test-installer-registration.ps1
+    - name: Restore checked dependency downloads
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ env.OPENRV_BUILD_DIR }}/RV_DEPS_DOWNLOAD
+        key: openrv-downloads-windows-${{ hashFiles('cmake/defaults/*.cmake', 'cmake/dependencies/**/*.cmake', 'cmake/patches/**') }}
+    - name: Check current interface sources and manual translation coverage
+      shell: pwsh
+      run: python tools/localization/sync_sources.py --repo . --output-dir _release_work/translation-source-check --lupdate "$env:QT_ROOT_DIR/bin/lupdate.exe"
+    - name: Test update checks offline before compiling dependencies
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $env:QT_PLUGIN_PATH = Join-Path $env:QT_ROOT_DIR 'plugins'
+        python -m unittest discover -s tests/localization/update_checker -p test_build_metadata.py -v
+        if ($LASTEXITCODE -ne 0) { throw 'Build metadata tests failed.' }
+        foreach ($updateFixture in @('development', 'released', 'official')) {
+          $updateTag = if ($updateFixture -eq 'released') { 'v4.1.0-zh.2' } else { '' }
+          $updateNumber = '0'; $updateNative = ''
+          if ($updateFixture -eq 'official') { $updateTag = 'v4.0.2'; $updateNumber = '17'; $updateNative = '4.0.0' }
+          $updateBuild = "_release_work/update-checker-$updateFixture"
+          cmake -S tests/localization/update_checker -B $updateBuild -G 'Visual Studio 17 2022' -A x64 -T 'v143,version=14.40' "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" "-DRV_TEST_RELEASE_TAG=$updateTag" "-DRV_TEST_BUILD_NUMBER=$updateNumber" "-DRV_TEST_NATIVE_VERSION=$updateNative"
+          if ($LASTEXITCODE -ne 0) { throw 'Update checker test configuration failed.' }
+          cmake --build $updateBuild --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Update checker test build failed.' }
+          ctest --test-dir $updateBuild -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw 'Update checker Qt tests failed.' }
+        }
+    - name: Build, install and verify native runtime
+      shell: msys2 {0}
+      run: bash ci/localized-release/build-windows.sh
+    - name: Package Windows installer and portable runtime
+      shell: pwsh
+      run: ./ci/localized-release/with-windows-gl.ps1 -Task Package

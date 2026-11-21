@@ -1,0 +1,211 @@
+name: 官方版本中英文打包与发布 (Auto) (Manual)
+run-name: OpenRV ${{ inputs.official_tag }} build ${{ github.run_number }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      official_tag:
+        description: '必填：官方稳定版标签，例如 v4.1.0（自动监控会填写最新稳定版）'
+        required: true
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-release-${{ inputs.official_tag }}-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  CMAKE_BUILD_PARALLEL_LEVEL: '2'
+  ORV_JOBS: '2'
+  PYTHONNOUSERSITE: '1'
+  PYTHONDONTWRITEBYTECODE: '1'
+  ORV_REQUIRE_GUI_SMOKE: 'true'
+
+jobs:
+  preflight:
+    name: Compose official source and check manual translations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
+      build_number: ${{ steps.plan.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check committed patch and resource inventory
+        run: python3 -B tools/refresh_patch_manifest.py --check
+      - name: Test release preparation without GitHub writes
+        run: python3 -m unittest discover -s ci/localized-release/tests -p 'test_*.py' -v
+      - name: Install source extraction tool
+        run: sudo apt-get update && sudo apt-get install -y qt6-tools-dev-tools qt6-l10n-tools
+      - name: Prepare immutable official workspace plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OFFICIAL_TAG: ${{ inputs.official_tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$OFFICIAL_TAG" ]; then
+            echo 'official_tag is required; enter an explicit official stable tag such as v4.1.0.' >&2
+            exit 1
+          fi
+          python3 ci/localized-release/prepare_release.py preflight --official-tag "$OFFICIAL_TAG" --workspace "$RUNNER_TEMP/openrv-official-source" --output _release_work/preflight
+      - name: Upload immutable build input and translation reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: official-build-input
+          path: _release_work/preflight/
+          if-no-files-found: warn
+          retention-days: 14
+
+  prepare:
+    name: Record the publication tag and official source identity
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      ORV_BUILD_NUMBER: ${{ needs.preflight.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: official-build-input
+          path: ${{ runner.temp }}/official-build-input
+      - name: Create only a missing publication tag at the verified tool snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORV_BUILD_PLAN_SHA256: ${{ needs.preflight.outputs.plan_sha256 }}
+        run: python3 ci/localized-release/prepare_release.py sync-tag --input "$RUNNER_TEMP/official-build-input" --plan-sha256 "$ORV_BUILD_PLAN_SHA256"
+
+  windows:
+    name: Windows x64 Release
+    runs-on: windows-2022
+    needs: [preflight]
+    timeout-minutes: 360
+    env:
+      ORV_BUILD_NUMBER: ${{ needs.preflight.outputs.build_number }}
+      ORV_RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
+      ORV_BUILD_PLAN_SHA256: ${{ needs.preflight.outputs.plan_sha256 }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: official-build-input
+          path: ${{ runner.temp }}/official-build-input
+      - name: Materialize official source plus verified maintenance patch
+        shell: pwsh
+        run: |
+          python ci/localized-release/prepare_release.py materialize --input "$env:RUNNER_TEMP/official-build-input" --plan-sha256 "$env:ORV_BUILD_PLAN_SHA256"
+          if ($LASTEXITCODE -ne 0) { throw 'Official source materialization failed.' }
+          git -c core.autocrlf=false submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { throw 'Official submodule checkout failed.' }
+      - uses: ./.github/actions/localized-build-windows
+      - name: Upload Windows release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: localized-release-Windows-x64
+          path: dist/localized-release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  macos:
+    name: macOS ${{ matrix.arch }} Release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            arch: x86_64
+            xcode: '16.4'
+          - os: macos-15
+            arch: arm64
+            xcode: '26.3'
+    runs-on: ${{ matrix.os }}
+    needs: [preflight]
+    timeout-minutes: 360
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      ORV_BUILD_NUMBER: ${{ needs.preflight.outputs.build_number }}
+      ORV_RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
+      ORV_BUILD_PLAN_SHA256: ${{ needs.preflight.outputs.plan_sha256 }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: official-build-input
+          path: ${{ runner.temp }}/official-build-input
+      - name: Materialize official source plus verified maintenance patch
+        run: |
+          set -euo pipefail
+          python3 ci/localized-release/prepare_release.py materialize --input "$RUNNER_TEMP/official-build-input" --plan-sha256 "$ORV_BUILD_PLAN_SHA256"
+          git -c core.autocrlf=false submodule update --init --recursive
+      - uses: ./.github/actions/localized-build-macos
+        with:
+          arch-type: ${{ matrix.arch }}
+          xcode-version: ${{ matrix.xcode }}
+      - name: Upload macOS release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: localized-release-macOS-${{ matrix.arch }}
+          path: dist/localized-release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  draft:
+    name: Assemble and publish verified three-platform official release
+    concurrency:
+      group: openrv-official-release-upload
+      cancel-in-progress: false
+    needs: [preflight, prepare, windows, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      ORV_BUILD_NUMBER: ${{ needs.preflight.outputs.build_number }}
+      ORV_RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
+      ORV_BUILD_PLAN_SHA256: ${{ needs.preflight.outputs.plan_sha256 }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: official-build-input
+          path: ${{ runner.temp }}/official-build-input
+      - name: Reconstruct and verify the same source for release assembly
+        run: python3 ci/localized-release/prepare_release.py materialize --input "$RUNNER_TEMP/official-build-input" --plan-sha256 "$ORV_BUILD_PLAN_SHA256"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: localized-release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify all native gates and publish verified release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ci/localized-release/prepare_release.py publish --input "$RUNNER_TEMP/official-build-input" --plan-sha256 "$ORV_BUILD_PLAN_SHA256" --assets release-assets

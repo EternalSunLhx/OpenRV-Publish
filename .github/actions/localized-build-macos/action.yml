@@ -1,0 +1,145 @@
+name: Localized macOS Release
+description: Native CY2025 build, runtime checks and app ZIP/DMG packaging
+inputs:
+  arch-type:
+    required: true
+    description: Native runner architecture (x86_64 or arm64)
+  xcode-version:
+    required: true
+    description: Explicit toolchain pin (Intel 16.4 or ARM 26.3)
+runs:
+  using: composite
+  steps:
+    - name: Select the pinned Xcode and recover hosted-runner disk space
+      shell: bash
+      env:
+        ORV_NATIVE_ARCH: ${{ inputs.arch-type }}
+        ORV_XCODE_VERSION: ${{ inputs.xcode-version }}
+      run: |
+        set -euo pipefail
+        test "$(uname -m)" = "$ORV_NATIVE_ARCH"
+        case "$ORV_NATIVE_ARCH:$ORV_XCODE_VERSION" in
+          x86_64:16.4|arm64:26.3) ;;
+          *) echo 'Unexpected architecture or Xcode pin' >&2; exit 1 ;;
+        esac
+        selected_xcode="/Applications/Xcode_${ORV_XCODE_VERSION}.app"
+        test -d "$selected_xcode/Contents/Developer"
+        selected_xcode=$(cd "$selected_xcode" && pwd -P)
+        test "$(dirname "$selected_xcode")" = /Applications
+        case "$selected_xcode" in
+          /Applications/Xcode_[0-9]*.app) ;;
+          *) echo "Unexpected selected Xcode path: $selected_xcode" >&2; exit 1 ;;
+        esac
+        DEVELOPER_DIR="$selected_xcode/Contents/Developer" xcodebuild -version | grep -Fx "Xcode $ORV_XCODE_VERSION"
+        echo "DEVELOPER_DIR=$selected_xcode/Contents/Developer" >> "$GITHUB_ENV"
+        df -h .
+        if [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ]; then
+          while IFS= read -r -d '' candidate; do
+            if [ "$candidate" = "$selected_xcode" ]; then continue; fi
+            case "$candidate" in
+              /Applications/Xcode_[0-9]*.app) test ! -L "$candidate" && sudo rm -rf -- "$candidate" ;;
+              *) echo "Unexpected Xcode cleanup path: $candidate" >&2; exit 1 ;;
+            esac
+          done < <(find /Applications -maxdepth 1 -type d -name 'Xcode_[0-9]*.app' -print0)
+        fi
+        df -h .
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: '3.11'
+    - uses: jwlawson/actions-setup-cmake@802fa1a2c4e212495c05bf94dba2704a92a472be # v2
+      with:
+        cmake-version: '3.31.6'
+    - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+      with:
+        version: '6.5.3'
+        host: mac
+        target: desktop
+        arch: clang_64
+        dir: '${{ runner.temp }}/openrv-qt'
+        modules: 'qt5compat qtimageformats qtlanguageserver qtmultimedia qtpositioning qtserialport qtquick3d qtquicktimeline qtshadertools qtwebchannel qtwebengine qtwebsockets'
+        archives: 'qtbase qtdeclarative qtsvg qttools qttranslations'
+        aqtversion: '==3.2.*'
+        py7zrversion: '==0.22.*'
+        setup-python: false
+        cache: false
+        install-deps: false
+    - name: Verify Qt SerialPort native dependency is installed
+      shell: bash
+      env:
+        ORV_NATIVE_ARCH: ${{ inputs.arch-type }}
+      run: |
+        set -euo pipefail
+        serial_port="$QT_ROOT_DIR/lib/QtSerialPort.framework/Versions/A/QtSerialPort"
+        test -f "$serial_port" && test -s "$serial_port"
+        lipo "$serial_port" -verify_arch "$ORV_NATIVE_ARCH"
+    - name: Prepare and verify Qt for the selected Xcode
+      shell: bash
+      env:
+        ORV_XCODE_VERSION: ${{ inputs.xcode-version }}
+      run: bash ci/localized-release/prepare-macos-qt.sh "$QT_ROOT_DIR" "$ORV_XCODE_VERSION"
+    - name: Verify actual native CGL and visible Cocoa Qt readiness before cold dependencies
+      id: macos_graphics_readiness
+      shell: bash
+      run: |
+        python3 -B ci/localized-release/macos_graphics_gate.py \
+          --qt "$QT_ROOT_DIR" --arch '${{ inputs.arch-type }}' \
+          --build "$RUNNER_TEMP/openrv-macos-gl-readiness" \
+          --output "_release_work/macos-gl-readiness-${{ inputs.arch-type }}"
+    - name: Preserve native graphics readiness evidence
+      if: ${{ always() && steps.macos_graphics_readiness.outcome != 'skipped' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: macos-graphics-readiness-${{ inputs.arch-type }}
+        path: _release_work/macos-gl-readiness-${{ inputs.arch-type }}/
+        if-no-files-found: error
+        retention-days: 14
+    - name: Install upstream native dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 -m pip install -r requirements.txt
+        python3 -m pip install 'delocate==0.13.0'
+        brew install --formula ninja readline sqlite3 xz zlib tcl-tk@8 python-tk autoconf automake libtool yasm meson nasm pkg-config glew ccache icu4c
+        rustup toolchain install 1.100.0 --profile minimal
+        echo 'RUSTUP_TOOLCHAIN=1.100.0' >> "$GITHUB_ENV"
+    - name: Verify the installed Qt SDK dependency closure before compiling
+      shell: bash
+      run: python3 -B ci/localized-release/check-macos-qt-dependencies.py --qt "$QT_ROOT_DIR" --arch '${{ inputs.arch-type }}'
+    - name: Test relocation with real tiny native Mach-O fixtures
+      shell: bash
+      run: python3 -B -m unittest discover -s ci/localized-release/tests -p test_macos_bundle_ids.py -v
+    - name: Test real native signing and script aliases before compiling
+      shell: bash
+      run: python3 -B -m unittest discover -s ci/localized-release/tests -p test_macos_signing.py -v
+    - name: Restore checked dependency downloads
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: _build_release/RV_DEPS_DOWNLOAD
+        key: openrv-downloads-macos-${{ hashFiles('cmake/defaults/*.cmake', 'cmake/dependencies/**/*.cmake', 'cmake/patches/**') }}
+    - name: Check current interface sources and manual translation coverage
+      shell: bash
+      run: python3 tools/localization/sync_sources.py --repo . --output-dir _release_work/translation-source-check --lupdate "$QT_ROOT_DIR/bin/lupdate"
+    - name: Test update checks offline before compiling dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        export QT_PLUGIN_PATH="$QT_ROOT_DIR/plugins"
+        python3 -m unittest discover -s tests/localization/update_checker -p test_build_metadata.py -v
+        for update_fixture in development released official; do
+          update_tag=''
+          update_number=0; update_native=''
+          if [ "$update_fixture" = released ]; then update_tag='v4.1.0-zh.2'; fi
+          if [ "$update_fixture" = official ]; then update_tag='v4.0.2'; update_number=17; update_native='4.0.0'; fi
+          update_build="_release_work/update-checker-$update_fixture"
+          cmake -S tests/localization/update_checker -B "$update_build" -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR" "-DCMAKE_OSX_ARCHITECTURES=$(uname -m)" "-DRV_TEST_RELEASE_TAG=$update_tag" "-DRV_TEST_BUILD_NUMBER=$update_number" "-DRV_TEST_NATIVE_VERSION=$update_native"
+          cmake --build "$update_build" --config Release --parallel 2
+          ctest --test-dir "$update_build" -C Release --output-on-failure
+        done
+    - name: Build and install
+      shell: bash
+      env:
+        ORV_ARCH: ${{ inputs.arch-type }}
+      run: bash ci/localized-release/build-macos.sh
+    - name: Verify and package app bundles
+      shell: bash
+      run: python3 ci/localized-release/package-macos.py --arch '${{ inputs.arch-type }}'

@@ -1,0 +1,36 @@
+name: 官方稳定版监控与构建 (Auto) (Manual)
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openrv-official-release-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    if: github.repository == 'EternalSunLhx/OpenRV-Publish' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test read-only monitoring and dispatch recovery offline
+        run: python3 -B -m unittest discover -s ci/upstream-release-watch/tests -p test_dispatch.py -v
+      - name: Check the latest official stable release and dispatch on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B ci/upstream-release-watch/dispatch.py --repo "$GITHUB_WORKSPACE"

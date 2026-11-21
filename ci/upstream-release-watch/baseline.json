@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "repository": "AcademySoftwareFoundation/OpenRV",
+  "release_id": 373903031,
+  "tag": "v4.0.2",
+  "object_sha": "27db5464a90ca19a9a30d540988ee109ee06bb7e",
+  "commit_sha": "27db5464a90ca19a9a30d540988ee109ee06bb7e",
+  "published_at": "2026-08-20T17:15:15Z",
+  "observed_at": "2026-11-18"
+}

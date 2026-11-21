@@ -1,0 +1,168 @@
+diff --git a/src/plugins/rv-packages/annotate_beta/annotate_beta_color_picker.py b/src/plugins/rv-packages/annotate_beta/annotate_beta_color_picker.py
+index cccbdeff2528a932cccd20549d3b71720f51e367..bbba54b1289d308e4ca1fbc3e18120ec43e7bacf 100644
+--- a/src/plugins/rv-packages/annotate_beta/annotate_beta_color_picker.py
++++ b/src/plugins/rv-packages/annotate_beta/annotate_beta_color_picker.py
+@@ -1,3 +1,4 @@
++from rv.qtutils import translate_ui as _rv_tr
+ # Copyright (c) 2026 Autodesk, Inc. All Rights Reserved.
+ # SPDX-License-Identifier: Apache-2.0
+ 
+@@ -196,7 +197,7 @@ class _ColorPickerSection(QtWidgets.QWidget):
+         dialog_button.setFixedSize(22, 22)
+         dialog_button.setAutoRaise(True)
+         dialog_button.setCursor(QtCore.Qt.PointingHandCursor)
+-        dialog_button.setToolTip("Color palette")
++        dialog_button.setToolTip(_rv_tr("Color palette"))
+         dialog_button.clicked.connect(self.dialog_requested)
+         swatch_layout.addWidget(dialog_button)
+         layout.addWidget(swatch_row)
+diff --git a/src/plugins/rv-packages/annotate_beta/annotate_beta_widget.py b/src/plugins/rv-packages/annotate_beta/annotate_beta_widget.py
+index f0bec6cc43ec0db6ae4722a4f9b72c5403df2db6..1c2d55553d1e6528e24248c033c2dcaf99de2e65 100644
+--- a/src/plugins/rv-packages/annotate_beta/annotate_beta_widget.py
++++ b/src/plugins/rv-packages/annotate_beta/annotate_beta_widget.py
+@@ -1,3 +1,4 @@
++from rv.qtutils import translate_ui as _rv_tr
+ # Copyright (c) 2026 Autodesk, Inc. All Rights Reserved.
+ # SPDX-License-Identifier: Apache-2.0
+ 
+@@ -56,7 +57,7 @@ _TOOLS = {
+ 
+ def _tool_button(tooltip: str = "", checkable: bool = True, icon_name: str | None = None):
+     button = QtWidgets.QToolButton()
+-    button.setToolTip(tooltip)
++    button.setToolTip(_rv_tr(tooltip))
+     button.setCheckable(checkable)
+     button.setFixedSize(30, 30)
+     button.setIconSize(QtCore.QSize(16, 16))
+@@ -114,7 +115,7 @@ class ColorSwatch(QtWidgets.QAbstractButton):
+         self._color = QtGui.QColor(constants.DEFAULT_COLOR)
+         self.setFixedSize(30, 30)
+         self.setCursor(QtCore.Qt.PointingHandCursor)
+-        self.setToolTip("Color")
++        self.setToolTip(_rv_tr("Color"))
+ 
+     def set_color(self, color):
+         self._color = QtGui.QColor(color)
+@@ -220,12 +221,12 @@ class _SliderSection(QtWidgets.QWidget):
+         self._maximum = maximum
+ 
+         self._slider = _AnnotationSlider(minimum, maximum, default, orientation)
+-        self._slider.setToolTip(label)
++        self._slider.setToolTip(_rv_tr(label))
+         self._slider.valueChanged.connect(self._on_slider_changed)
+ 
+         self._input = _ValueLineEdit(f"{default}{suffix}")
+         self._input.setObjectName("sliderValue")
+-        self._input.setToolTip(label)
++        self._input.setToolTip(_rv_tr(label))
+         self._input.setFixedWidth(48)
+         self._input.editingFinished.connect(self._on_input_committed)
+ 
+@@ -243,7 +244,7 @@ class _SliderSection(QtWidgets.QWidget):
+             layout.addWidget(self._input, alignment=QtCore.Qt.AlignHCenter)
+         else:
+             layout.setSpacing(0)
+-            title = QtWidgets.QLabel(label)
++            title = QtWidgets.QLabel(_rv_tr(label))
+             title.setObjectName("sliderSectionTitle")
+             layout.addWidget(title)
+             row = QtWidgets.QHBoxLayout()
+@@ -337,7 +338,8 @@ def _add_checkable_actions(menu, items):
+     """Add one checkable action per (item_id, label, icon_name) to `menu`, in an exclusive group."""
+     group = QtGui.QActionGroup(menu)
+     for item_id, label, icon_name in items:
+-        action = menu.addAction(_load_icon(icon_name), label) if icon_name else menu.addAction(label)
++        display_label = _rv_tr(label)
++        action = menu.addAction(_load_icon(icon_name), display_label) if icon_name else menu.addAction(display_label)
+         action.setCheckable(True)
+         action.setData(item_id)
+         group.addAction(action)
+@@ -350,7 +352,7 @@ class _PopupToolButton(QtWidgets.QToolButton):
+         super().__init__(parent)
+         self.setObjectName("menuToolButton")
+         self.setProperty("tbstyle", "palette")
+-        self.setToolTip(tooltip)
++        self.setToolTip(_rv_tr(tooltip))
+         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+         self.setFixedHeight(30)
+         self.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+@@ -530,7 +532,7 @@ class _BrushSettings(QtWidgets.QWidget):
+         layout.setContentsMargins(8, 4, 8, 4)
+         layout.setSpacing(1)
+ 
+-        title = QtWidgets.QLabel(group)
++        title = QtWidgets.QLabel(_rv_tr(str(group)))
+         title.setObjectName("brushSettingsGroupTitle")
+         layout.addWidget(title)
+         layout.addSpacing(12)
+@@ -573,7 +575,7 @@ class _BrushSettingsButton(_PopupToolButton):
+             menu.addAction(settings_action)
+             menu.addSeparator()
+             self._groups.append(settings)
+-        menu.addAction("Reset all to default", self._reset)
++        menu.addAction(_rv_tr("Reset all to default"), self._reset)
+         self.setMenu(menu)
+ 
+     def _reset(self):
+@@ -605,7 +607,7 @@ class _BrushTypeComboBox(_WidePopupComboBox):
+ 
+     def __init__(self, parent=None):
+         super().__init__(parent)
+-        self.setToolTip("Brush types")
++        self.setToolTip(_rv_tr("Brush types"))
+         self._icon = _load_icon("erase_gauss")  # placeholder icon
+         self.setItemDelegate(_BrushItemDelegate(self))
+         preview = self._paint_stroke_preview()
+@@ -656,7 +658,7 @@ class _ShapeOptionsPanel(_SliderPanel):
+ 
+     def __init__(self, parent=None):
+         super().__init__(parent)
+-        self._filled = QtWidgets.QCheckBox("Filled")
++        self._filled = QtWidgets.QCheckBox(_rv_tr("Filled"))
+         self._filled.toggled.connect(self.filled_changed)
+         self._layout.addWidget(self._filled)
+         self._layout.addSpacing(8)
+@@ -885,11 +887,11 @@ class _TextOptionsPanel(QtWidgets.QWidget):
+         self._font_timer = None
+ 
+         self._font_combo = _FontComboBox()
+-        self._font_combo.setToolTip("Font")
++        self._font_combo.setToolTip(_rv_tr("Font"))
+         self._font_combo.setItemDelegate(_FontNameDelegate(self._font_combo))
+         self._font_combo.setMaxVisibleItems(10)
+         # A placeholder keeps the first loaded font from being auto-selected.
+-        self._font_combo.setPlaceholderText("Aa")
++        self._font_combo.setPlaceholderText(_rv_tr("Aa"))
+         self._font_combo.currentTextChanged.connect(self._on_font_selected)
+         self._font_combo.currentTextChanged.connect(self.font_family_changed)
+         layout.addWidget(self._font_combo)
+@@ -1176,7 +1178,7 @@ class AnnotateToolStrip(_StyledWidget):
+ 
+         layout.addStretch()
+ 
+-        self._undo_action = QtGui.QAction(_load_icon("undo"), "Undo", self)
++        self._undo_action = QtGui.QAction(_load_icon("undo"), _rv_tr("Undo"), self)
+         self._undo_action.setShortcut(QtGui.QKeySequence.StandardKey.Undo)
+         self._undo_action.setShortcutContext(QtCore.Qt.ApplicationShortcut)
+         self._undo_action.setEnabled(False)
+@@ -1189,7 +1191,7 @@ class AnnotateToolStrip(_StyledWidget):
+ 
+         layout.addSpacing(1)
+ 
+-        self._redo_action = QtGui.QAction(_load_icon("redo"), "Redo", self)
++        self._redo_action = QtGui.QAction(_load_icon("redo"), _rv_tr("Redo"), self)
+         if sys.platform == "win32":
+             self._redo_action.setShortcuts([QtGui.QKeySequence("Ctrl+Y"), QtGui.QKeySequence("Ctrl+Shift+Z")])
+         else:
+@@ -1205,9 +1207,9 @@ class AnnotateToolStrip(_StyledWidget):
+ 
+         layout.addSpacing(1)
+ 
+-        self._clear_frame_action = QtGui.QAction("Clear Frame", self)
++        self._clear_frame_action = QtGui.QAction(_rv_tr("Clear Frame"), self)
+         self._clear_frame_action.triggered.connect(self.clear_requested)
+-        self._clear_all_frames_action = QtGui.QAction("Clear All Frames on Timeline", self)
++        self._clear_all_frames_action = QtGui.QAction(_rv_tr("Clear All Frames on Timeline"), self)
+         self._clear_all_frames_action.triggered.connect(self._on_clear_all_triggered)
+ 
+         self._clear_button = _tool_button("Clear Frame", checkable=False, icon_name="clear")
