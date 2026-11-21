@@ -77,6 +77,9 @@ def lightweight_fixture(*, include_metadata=False, optional='absent', annotated=
 
         def own(source, destination, data, *, replace=False, mode='100644'):
             write(trusted, source, data)
+            if mode == '100755':
+                # Subsequent git add must observe the same mode on POSIX filesystems.
+                (trusted / source).chmod(0o755)
             owned.append({'source': source, 'destination': destination, 'mode': mode,
                           'sha256': hashlib.sha256((trusted / source).read_bytes()).hexdigest(), 'replace': replace})
 
