@@ -337,7 +337,7 @@
       "source": "ci/localized-release/tests/lightweight_fixture.py",
       "destination": "ci/localized-release/tests/lightweight_fixture.py",
       "mode": "100644",
-      "sha256": "711c4ff913ed5738b1eea31198a6a8383b441dc2346823c297fac270a08fa311",
+      "sha256": "43115f8fb6135be167b6cc4cfd24abc1ece7ef950cce78606dab0a9f58b015b6",
       "replace": false
     },
     {

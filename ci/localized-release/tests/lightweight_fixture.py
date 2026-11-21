@@ -94,7 +94,12 @@ def lightweight_fixture(*, include_metadata=False, optional='absent', annotated=
             for path in ('src/lib/app/RvCommon/RvLocalizedBuild.cmake',
                          'src/lib/app/RvCommon/RvCommon/RvLocalizedBuild.h.in'):
                 source = 'overlay/' + path
-                own(source, path, (ROOT / source).read_bytes())
+                # Tests run both before and after source materialization. The
+                # fixture keeps its owned overlay mapping in either layout.
+                metadata_input = ROOT / source
+                if not metadata_input.is_file():
+                    metadata_input = ROOT / path
+                own(source, path, metadata_input.read_bytes())
         configuration = {'schema': 2, 'repository': w.UPSTREAM, 'source_base_sha': patch_base,
             'optional_upstream_components': [component],
             'patches': [{'path': 'patches/core.patch', 'sha256': hashlib.sha256(core).hexdigest(), 'optional_component': None},
