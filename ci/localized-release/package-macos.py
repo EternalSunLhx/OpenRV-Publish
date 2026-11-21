@@ -126,6 +126,14 @@ def main() -> None:
     smoke_report = json.loads((smoke / 'report.json').read_text(encoding='utf-8'))
     persistence_proof = {'status': 'skipped', 'reason': 'Artifacts-only diagnostic did not require visible GUI tests.'}
     if os.environ.get('ORV_REQUIRE_GUI_SMOKE') == 'true':
+        gui_steps = [step for step in smoke_report['steps'] if step.get('name', '').startswith('gui-')]
+        if (smoke_report.get('guiPassed') is not True or len(gui_steps) != 2
+                or {step.get('name') for step in gui_steps} != {'gui-en', 'gui-zh_CN'}
+                or any(step.get('status') != 'passed' or step.get('exitCode') != 0
+                       or step.get('timedOut') is not False
+                       or any(step.get(field) is not True for field in ('requestClose', 'closeAccepted', 'sessionClosed'))
+                       for step in gui_steps)):
+            raise RuntimeError('Expected both Mac GUI checks to close their sessions and exit normally')
         persistence_dir = work / ('persistence-' + args.arch)
         subprocess.run([sys.executable, str(repo / 'tests/localization/macos_language_persistence.py'),
                         '--runtime', str(app), '--work', str(persistence_dir)], check=True)
@@ -170,7 +178,8 @@ def main() -> None:
                     bundledExternalLibraries=external_libraries, dependencyResolver='delocate 0.13.0',
                     guiPassed=smoke_report.get('guiPassed', False),
                     languagePersistence=persistence_proof,
-                    smoke=[{key: step[key] for key in ('name', 'status', 'exitCode', 'timedOut')}
+                    smoke=[{key: step[key] for key in ('name', 'status', 'exitCode', 'timedOut',
+                                                     'requestClose', 'closeAccepted', 'sessionClosed') if key in step}
                            for step in smoke_report['steps']])
     manifest_name = base + '.build.json'
     write_json(output / manifest_name, metadata)

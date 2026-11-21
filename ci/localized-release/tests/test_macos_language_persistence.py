@@ -243,6 +243,86 @@ class RestartNoteMatcherTests(unittest.TestCase):
                 self.assertEqual(state['restartNote'] is not None, bool(expected))
 
 
+class SnapshotCloseContractTests(unittest.TestCase):
+    """Generated snapshot callback protocol only; no native preferences or Qt."""
+
+    @contextlib.contextmanager
+    def fixture(self, *, accepted=True):
+        queued, destroyed = [], []
+        window = mock.Mock()
+        window.objectName.return_value = 'rv-session000'
+        window.isVisible.return_value = True
+        window.testAttribute.return_value = True
+        window.close.return_value = accepted
+        window.destroyed.connect.side_effect = destroyed.append
+        app = mock.Mock()
+        app.topLevelWidgets.return_value = [window]
+        app.quitOnLastWindowClosed.return_value = True
+        app.organizationName.return_value, app.applicationName.return_value = 'fixture', 'OpenRV'
+        settings = mock.Mock()
+        settings.contains.return_value = True
+        settings.value.return_value = 'en'
+        settings.status.return_value = 0
+        fsync = mock.Mock(wraps=os.fsync)
+        core = types.SimpleNamespace(Qt=types.SimpleNamespace(WA_DeleteOnClose=1, WA_QuitOnClose=2),
+                                     QTimer=types.SimpleNamespace(singleShot=lambda delay, callback: queued.append((delay, callback))),
+                                     QSettings=types.SimpleNamespace(NoError=0))
+        functions = [node for node in ast.parse(persistence.PROBE).body
+                     if isinstance(node, ast.FunctionDef) and node.name == 'probe']
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stdout(io.StringIO()) as output, \
+                contextlib.redirect_stderr(io.StringIO()):
+            snapshot = Path(temporary) / 'snapshot.json'
+            def mutation(key, value):
+                fsync.assert_called_once()
+                self.assertEqual(json.loads(snapshot.read_text())['value'], 'en')
+                self.assertEqual((key, value), (persistence.KEY, 'system'))
+            settings.setValue.side_effect = mutation
+            namespace = {'probe_state': {'closing': False, 'finished': False, 'requestClose': False, 'closeAccepted': False},
+                         'probe_deadline': 20, 'time': types.SimpleNamespace(monotonic=mock.Mock(return_value=0)),
+                         'app': app, 'QtCore': core, 'json': json, 'traceback': traceback,
+                         'config': {'snapshot': str(snapshot)}, 'os': types.SimpleNamespace(fsync=fsync),
+                         'KEY': persistence.KEY, 'explicit_settings': mock.Mock(return_value=(settings, '/owned/fixture.plist'))}
+            exec(compile(ast.Module(body=functions, type_ignores=[]), '<actual-snapshot-probe>', 'exec'), namespace)
+            yield namespace, window, app, settings, queued, destroyed, snapshot, output
+
+    def test_snapshot_fsync_and_mutation_precede_close_but_marker_waits_for_destruction(self):
+        with self.fixture() as (namespace, window, app, settings, queued, destroyed, snapshot, output):
+            namespace['probe']()
+            self.assertEqual(len(queued), 1)
+            self.assertEqual(queued[0][0], 0)
+            settings.setValue.assert_called_once_with(persistence.KEY, 'system')
+            original = snapshot.read_bytes()
+            self.assertNotIn('MAC_PREFERENCE_SNAPSHOT_OK', output.getvalue())
+            window.close.assert_not_called()
+            queued[0][1]()
+            self.assertNotIn('MAC_PREFERENCE_SNAPSHOT_OK', output.getvalue())
+            destroyed[0]()
+            self.assertIn('MAC_PREFERENCE_SNAPSHOT_OK', output.getvalue())
+            self.assertEqual(snapshot.read_bytes(), original)
+            app.exit.assert_not_called()
+
+    def test_snapshot_close_rejection_fails_without_success_marker_and_preserves_snapshot(self):
+        with self.fixture(accepted=False) as (namespace, window, app, settings, queued, destroyed, snapshot, output):
+            namespace['probe']()
+            queued[0][1]()
+            destroyed[0]()
+            app.exit.assert_called_once_with(1)
+            self.assertNotIn('MAC_PREFERENCE_SNAPSHOT_OK', output.getvalue())
+            self.assertTrue(snapshot.exists(), 'Recovery must retain its original snapshot')
+
+    def test_waits_for_owned_window_only_within_original_budget_before_preferences_access(self):
+        with self.fixture() as (namespace, window, app, settings, queued, destroyed, snapshot, output):
+            app.topLevelWidgets.return_value = []
+            namespace['probe']()
+            self.assertEqual(queued[0][0], 200)
+            namespace['explicit_settings'].assert_not_called()
+            self.assertFalse(snapshot.exists())
+            namespace['time'].monotonic.return_value = 21
+            queued[0][1]()
+            app.exit.assert_called_once_with(1)
+            namespace['explicit_settings'].assert_not_called()
+
+
 class NormalCloseContractTests(unittest.TestCase):
     """Exercise the generated callback protocol, without claiming native Qt execution."""
 

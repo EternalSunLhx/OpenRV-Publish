@@ -50,7 +50,7 @@
       "source": "ci/localized-release/README.md",
       "destination": "ci/localized-release/README.md",
       "mode": "100644",
-      "sha256": "be50df027fc5be3c36b1057c42fc852d4c1c00a3d2b21f2715c01397e8ef4d40",
+      "sha256": "c9731cc7c9c0d276941a8bc52cc089a49ea24b29c3dff4a8250d6609a1013d7d",
       "replace": false
     },
     {
@@ -64,7 +64,7 @@
       "source": "ci/localized-release/assemble_release.py",
       "destination": "ci/localized-release/assemble_release.py",
       "mode": "100644",
-      "sha256": "dbac7a2a6659cb5d892ed6aaf0b0a43fe8569b08b4c1bba5ebce447ff274733e",
+      "sha256": "c152b337f4ba856bfca13e05734aaffbf1d399973685cba12c2052ca0c49ac65",
       "replace": false
     },
     {
@@ -99,7 +99,7 @@
       "source": "ci/localized-release/collect_macos_runtime_evidence.py",
       "destination": "ci/localized-release/collect_macos_runtime_evidence.py",
       "mode": "100644",
-      "sha256": "8174aca7e163bde2d52bbc837ce0d35a237ef25dcb9866da6cad0992dbcc367c",
+      "sha256": "660f07e1d38acc8b49871441a4d9496fe351eb25486090e771063c0c81b377d0",
       "replace": false
     },
     {
@@ -232,7 +232,7 @@
       "source": "ci/localized-release/package-macos.py",
       "destination": "ci/localized-release/package-macos.py",
       "mode": "100644",
-      "sha256": "309cb156c7a7400de443aacb9bac731145fd59644a6f30108c411b58dc42d1b2",
+      "sha256": "4f449c75a5b73e52ead91a6088d67fdb6fef3eaf1b74911a2ec853f6086d0bb0",
       "replace": false
     },
     {
@@ -302,7 +302,7 @@
       "source": "ci/localized-release/runtime_smoke.py",
       "destination": "ci/localized-release/runtime_smoke.py",
       "mode": "100644",
-      "sha256": "776f27febbaa81fa0b63f6e90e7c8d9dd452a7326529e07a1822275f842c857c",
+      "sha256": "381336b460237e11019da7dca4af62b2cf71a3f2b1068d176a6329c5ac6fa87c",
       "replace": false
     },
     {
@@ -397,10 +397,17 @@
       "replace": false
     },
     {
+      "source": "ci/localized-release/tests/test_macos_gui_shutdown_contract.py",
+      "destination": "ci/localized-release/tests/test_macos_gui_shutdown_contract.py",
+      "mode": "100644",
+      "sha256": "67ecebd8c5f9432884acf59014f0a3a45299a0cb83bb455572dc9c6e896c5153",
+      "replace": false
+    },
+    {
       "source": "ci/localized-release/tests/test_macos_language_persistence.py",
       "destination": "ci/localized-release/tests/test_macos_language_persistence.py",
       "mode": "100644",
-      "sha256": "5947917be0536334e7877bed874bc1ea65bd260a1923f9042d1d3c61b192b494",
+      "sha256": "e7962263df7faf6f322b9dbf26dfa304178e39812549ba4f0505d288312e1f4f",
       "replace": false
     },
     {
@@ -435,7 +442,7 @@
       "source": "ci/localized-release/tests/test_macos_runtime_evidence.py",
       "destination": "ci/localized-release/tests/test_macos_runtime_evidence.py",
       "mode": "100644",
-      "sha256": "4390f311cac39b3251e4c05691d00d2768fb51735a41a4724d52f6d484350896",
+      "sha256": "58284ad73e4787a42c7905bdc0185afc8474fd3fdd27f26f01374802e881aa0f",
       "replace": false
     },
     {
@@ -463,7 +470,7 @@
       "source": "ci/localized-release/tests/test_official_workspace.py",
       "destination": "ci/localized-release/tests/test_official_workspace.py",
       "mode": "100644",
-      "sha256": "e65b88f95c5348ef4a82a880ece4dea29729213ba101b1c97fa293c7080bcabe",
+      "sha256": "ee247ee1c2d8df6d43ffc2d754e7a63d37ce8f71bd2ed8dc980fe1f5a26fa25d",
       "replace": false
     },
     {
@@ -513,6 +520,13 @@
       "destination": "ci/localized-release/tests/test_release_notes.py",
       "mode": "100644",
       "sha256": "e291611de9e9a1d83ca9505e9912dd7e1513bef0c807f7f10ce82243255efb8c",
+      "replace": false
+    },
+    {
+      "source": "ci/localized-release/tests/test_runtime_smoke.py",
+      "destination": "ci/localized-release/tests/test_runtime_smoke.py",
+      "mode": "100644",
+      "sha256": "88d6325818853c3e1fc86248006712aa5b220729e482c9c9d03bf55727ff21a2",
       "replace": false
     },
     {
@@ -652,7 +666,7 @@
       "source": "tests/localization/macos_language_persistence.py",
       "destination": "tests/localization/macos_language_persistence.py",
       "mode": "100644",
-      "sha256": "ae9fbd8b26d1a7b0e8d9355b27b1a9e9174ef760a114f61692aee6a6479a6c18",
+      "sha256": "0bfe8f4b8d6250d3955cdceb2d03647abe3129df984cd139a32eb0a5dd3b0bf3",
       "replace": false
     },
     {

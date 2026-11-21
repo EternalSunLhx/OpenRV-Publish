@@ -95,6 +95,26 @@ def crash_stack(data: str, executable: Path, pids: set[int]):
             'framesTruncated': len(frames) > 256}
 
 
+def owned_crash_windows(repo: Path, work: Path, arch: str):
+    """Bind each report's owned GUI PIDs to that report's own runtime window."""
+    windows = []
+    for kind, key in (('persistence', 'launches'), ('smoke', 'steps')):
+        report = read_json(repo, work / (kind + '-' + arch) / 'report.json')
+        if not isinstance(report, dict) or not isinstance(report.get(key), list):
+            continue
+        pids = {launch['pid'] for launch in report[key]
+                if isinstance(launch, dict) and type(launch.get('pid')) is int and launch['pid'] > 0
+                and (kind == 'persistence' or launch.get('name') in ('gui-en', 'gui-zh_CN'))}
+        try:
+            started = datetime.datetime.fromisoformat(report['startedAtUtc']).timestamp()
+            finished = datetime.datetime.fromisoformat(report['finishedAtUtc']).timestamp()
+        except (TypeError, KeyError, ValueError, OverflowError, OSError):
+            continue
+        if pids and started > 0 and finished >= started:
+            windows.append((started, finished, pids))
+    return windows
+
+
 def collect(repo: Path, arch: str, diagnostic_dir: Path) -> Path:
     if arch not in ('x86_64', 'arm64'):
         raise ValueError('Unsupported architecture')
@@ -142,21 +162,11 @@ def collect(repo: Path, arch: str, diagnostic_dir: Path) -> Path:
                 payload = stream.read(limit)
             save(relative, payload, size > limit)
 
-    persistence = read_json(repo, work / ('persistence-' + arch) / 'report.json')
-    launches = persistence.get('launches', []) if isinstance(persistence, dict) else []
-    if not isinstance(launches, list):
-        launches = []
-    pids = {launch['pid'] for launch in launches
-            if isinstance(launch, dict) and type(launch.get('pid')) is int and launch['pid'] > 0}
-    try:
-        started = datetime.datetime.fromisoformat(persistence['startedAtUtc']).timestamp()
-        finished = datetime.datetime.fromisoformat(persistence['finishedAtUtc']).timestamp()
-    except (TypeError, KeyError, ValueError):
-        started, finished = 0, 0
+    windows = owned_crash_windows(repo, work, arch)
     executable = repo / '_install_release/RV.app/Contents/MacOS/rv'
     if not safe_file(repo, executable):
         executable = executable.with_name('RV')
-    if pids and started > 0 and finished >= started and safe_file(repo, executable):
+    if windows and safe_file(repo, executable):
         # Resolve only the already-owned executable. Untrusted report paths are compared
         # literally; placeholder/anonymized paths and previous runs cannot match.
         executable = executable.resolve()
@@ -168,7 +178,9 @@ def collect(repo: Path, arch: str, diagnostic_dir: Path) -> Path:
                 if not safe_file(diagnostic_dir, source):
                     continue
                 stat = source.stat()
-                if stat.st_size > IPS_LIMIT or not started - 2 <= stat.st_mtime <= finished + 60:
+                pids = {pid for started, finished, owned in windows
+                        if started - 2 <= stat.st_mtime <= finished + 60 for pid in owned}
+                if stat.st_size > IPS_LIMIT or not pids:
                     continue
                 with source.open('rb') as stream:
                     raw = stream.read(IPS_LIMIT + 1)

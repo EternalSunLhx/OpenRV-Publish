@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import pathlib
@@ -66,7 +67,62 @@ import json, os, pathlib, runpy, sys, time, traceback
 from PySide6 import QtCore, QtWidgets
 from rv import commands
 deadline = time.monotonic() + 20
+gui_state = {'closing': False, 'finished': False}
+
+def finish_gui(app, proof, windows):
+    if sys.platform != 'darwin':
+        with open(os.environ['ORV_GUI_REPORT'], 'w', encoding='utf-8') as stream:
+            json.dump(proof, stream, ensure_ascii=False)
+        print('GUI_LANGUAGE_OK', flush=True)
+        app.exit(0)
+        return
+    if gui_state['closing'] or gui_state['finished']:
+        return
+    sessions = [window for window in windows if window.objectName().startswith('rv-session')]
+    assert len(sessions) == 1, 'Expected exactly one owned visible RV session'
+    window = sessions[0]
+    assert window.isVisible() and window.testAttribute(QtCore.Qt.WA_DeleteOnClose)
+    assert window.testAttribute(QtCore.Qt.WA_QuitOnClose) and app.quitOnLastWindowClosed()
+    gui_state['closing'] = True
+    proof.update(status='closing', requestClose=False, closeAccepted=False, sessionClosed=False)
+
+    def fail_close():
+        gui_state['finished'] = True
+        traceback.print_exc()
+        QtCore.QCoreApplication.exit(1)
+
+    def session_closed(*unused):
+        if gui_state['finished']:
+            return
+        try:
+            assert proof['requestClose'] and proof['closeAccepted'], 'Session closed before its owned close request completed'
+            proof.update(status='passed', sessionClosed=True)
+            with open(os.environ['ORV_GUI_REPORT'], 'w', encoding='utf-8') as stream:
+                json.dump(proof, stream, ensure_ascii=False)
+            print('GUI_LANGUAGE_OK', flush=True)
+            gui_state['finished'] = True
+        except BaseException:
+            fail_close()
+
+    def request_close():
+        if gui_state['finished']:
+            return
+        try:
+            proof['requestClose'] = True
+            # Same RvDocument.close() used by RvApplication::quitAll. Keep the
+            # event loop running through normal session/GL/menu destruction.
+            assert window.close(), 'RV rejected the owned session close request'
+            proof['closeAccepted'] = True
+        except BaseException:
+            fail_close()
+
+    window.destroyed.connect(session_closed)
+    # Unwind the menu/HUD check before requesting close; no timed sleep.
+    QtCore.QTimer.singleShot(0, request_close)
+
 def check():
+    if gui_state['closing'] or gui_state['finished']:
+        return
     try:
         app = QtWidgets.QApplication.instance()
         expected = os.environ['RV_UI_LANGUAGE']
@@ -138,21 +194,29 @@ def check():
             assert all(action.isCheckable() for action in menu.actions())
         default_view_result = runpy.run_path(os.environ['ORV_DEFAULT_VIEW_FIXTURE'])['check_default_view_labels']()
         hud_result = runpy.run_path(os.environ['ORV_HUD_FIXTURE'])['check_hud_localization']()
-        with open(os.environ['ORV_GUI_REPORT'], 'w', encoding='utf-8') as stream:
-            json.dump({'language': actual, 'fileMenuTranslation': translated,
+        proof = {'language': actual, 'fileMenuTranslation': translated,
                        'qtBaseTranslationLoaded': qt_base_loaded, 'overlayFontFile': overlay_font,
                        'checkedMenuPaths': sorted(menu_checks),
                        'defaultViewLabels': default_view_result, 'hudLocalization': hud_result,
                        'actualFileMenuTexts': [action.text() for action in actions],
                        'languageMenuActionNames': sorted(expected_names),
-                       'fileSources': commands.nodesOfType('RVFileSource')}, stream, ensure_ascii=False)
-        print('GUI_LANGUAGE_OK', flush=True)
-        app.exit(0)
+                       'fileSources': commands.nodesOfType('RVFileSource')}
+        finish_gui(app, proof, windows)
     except BaseException:
         traceback.print_exc()
         QtCore.QCoreApplication.exit(1)
 QtCore.QTimer.singleShot(200, check)
 '''
+
+
+def step_passed(exit_code, timed_out, stdout, marker, *, gui_language=None, gui_details=None):
+    """A completed GUI proof never substitutes for a clean native process exit."""
+    passed = not timed_out and exit_code == 0 and (not marker or marker in stdout)
+    if gui_language is not None:
+        passed = (passed and isinstance(gui_details, dict) and gui_details.get('status') == 'passed'
+                  and gui_details.get('language') == gui_language
+                  and all(gui_details.get(key) is True for key in ('requestClose', 'closeAccepted', 'sessionClosed')))
+    return passed
 
 
 def main() -> int:
@@ -185,6 +249,7 @@ def main() -> int:
         if not path.is_file(): raise FileNotFoundError(path)
     steps = []
     report = {'runtime': str(runtime), 'requiredGui': args.require_gui, 'steps': steps,
+              'startedAtUtc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
               'graphicsCapability': 'Measured only by the reported GUI checks; playback performance is not assessed.'}
 
     def invoke(name, binary, arguments, marker='', language='', offscreen=False):
@@ -241,10 +306,24 @@ def main() -> int:
         stdout_text, stderr_text = (value.decode('utf-8', errors='replace') for value in (stdout, stderr))
         (folder / 'stdout.log').write_text(stdout_text, encoding='utf-8')
         (folder / 'stderr.log').write_text(stderr_text, encoding='utf-8')
-        passed = not timed_out and process.returncode == 0 and (not marker or marker in stdout_text)
+        gui_language = language if sys.platform == 'darwin' and name in ('gui-en', 'gui-zh_CN') else None
+        gui_details, gui_error = None, None
+        if gui_language is not None:
+            try:
+                gui_details = json.loads((folder / 'gui.json').read_text(encoding='utf-8'))
+            except (OSError, ValueError) as error:
+                gui_error = type(error).__name__ + ': ' + str(error)[:500]
+        passed = step_passed(process.returncode, timed_out, stdout_text, marker,
+                             gui_language=gui_language, gui_details=gui_details)
         result = {'name': name, 'status': 'passed' if passed else 'failed', 'exitCode': process.returncode,
+                  'pid': process.pid,
                   'timedOut': timed_out, 'seconds': round(time.monotonic()-started, 3),
                   'stdout': stdout_text, 'stderr': stderr_text}
+        if gui_language is not None:
+            result.update({key: gui_details.get(key) if isinstance(gui_details, dict) else None
+                           for key in ('requestClose', 'closeAccepted', 'sessionClosed')})
+            if gui_error:
+                result['guiReportError'] = gui_error
         steps.append(result)
         print(f"{result['status']}: {name} (exit={process.returncode})", flush=True)
         if not passed:
@@ -281,6 +360,7 @@ def main() -> int:
         report['aacMediaPassed'] = aac_ok
         return int(not aac_ok or (args.require_gui and not gui_ok))
     finally:
+        report['finishedAtUtc'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         (work / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 

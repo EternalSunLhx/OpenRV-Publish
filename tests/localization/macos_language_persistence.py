@@ -59,12 +59,25 @@ def explicit_settings(identity):
 '''
 
 PROBE = EMBEDDED_COMMON + r'''
-import traceback
+import time, traceback
 from PySide6 import QtWidgets
 app = QtWidgets.QApplication.instance()
+probe_deadline = time.monotonic() + 20
+probe_state = {'closing': False, 'finished': False, 'requestClose': False, 'closeAccepted': False}
 
 def probe():
+    if probe_state['closing'] or probe_state['finished']:
+        return
     try:
+        windows = [window for window in app.topLevelWidgets()
+                   if window.isVisible() and window.objectName().startswith('rv-session')]
+        if not windows and time.monotonic() < probe_deadline:
+            QtCore.QTimer.singleShot(200, probe)
+            return
+        assert len(windows) == 1, 'Expected one owned visible RV session within the original 20-second probe budget'
+        window = windows[0]
+        assert window.testAttribute(QtCore.Qt.WA_DeleteOnClose)
+        assert window.testAttribute(QtCore.Qt.WA_QuitOnClose) and app.quitOnLastWindowClosed()
         identity = {'organization': app.organizationName(), 'application': app.applicationName()}
         settings, filename = explicit_settings(identity)
         present = settings.contains(KEY)
@@ -79,9 +92,36 @@ def probe():
         settings.setValue(KEY, 'system')
         settings.sync()
         assert settings.status() == QtCore.QSettings.NoError, settings.status()
-        print('MAC_PREFERENCE_SNAPSHOT_OK', flush=True)
-        app.exit(0)
+        probe_state['closing'] = True
+
+        def session_closed(*unused):
+            if probe_state['finished']:
+                return
+            try:
+                assert probe_state['requestClose'] and probe_state['closeAccepted'], 'Snapshot session closed before its owned close request completed'
+                print('MAC_PREFERENCE_SNAPSHOT_OK', flush=True)
+                probe_state['finished'] = True
+            except BaseException:
+                probe_state['finished'] = True
+                traceback.print_exc()
+                app.exit(1)
+
+        def request_close():
+            if probe_state['finished']:
+                return
+            try:
+                probe_state['requestClose'] = True
+                assert window.close(), 'RV rejected the snapshot session close request'
+                probe_state['closeAccepted'] = True
+            except BaseException:
+                probe_state['finished'] = True
+                traceback.print_exc()
+                app.exit(1)
+
+        window.destroyed.connect(session_closed)
+        QtCore.QTimer.singleShot(0, request_close)
     except BaseException:
+        probe_state['finished'] = True
         traceback.print_exc()
         app.exit(1)
 

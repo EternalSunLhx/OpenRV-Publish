@@ -119,6 +119,14 @@ def assemble(repo: pathlib.Path, assets: pathlib.Path, tag: str) -> None:
         if identity[0] == 'Windows' and manifest.get('languagePersistence', {}).get('status') != 'passed':
             raise ValueError('Windows native language chooser persistence did not pass')
         if identity[0] == 'macOS':
+            gui_steps = [step for step in manifest['smoke'] if step.get('name', '').startswith('gui-')]
+            if (manifest.get('guiPassed') is not True or len(gui_steps) != 2
+                    or {step.get('name') for step in gui_steps} != {'gui-en', 'gui-zh_CN'}
+                    or any(step.get('status') != 'passed' or step.get('exitCode') != 0
+                           or step.get('timedOut') is not False
+                           or any(step.get(field) is not True for field in ('requestClose', 'closeAccepted', 'sessionClosed'))
+                           for step in gui_steps)):
+                raise ValueError('Mac GUI checks did not close their sessions and exit normally')
             persistence = manifest.get('languagePersistence', {})
             if (persistence.get('status') != 'passed' or len(persistence.get('launches', [])) != 3
                     or any(persistence.get('preferenceRecovery', {}).get(operation) != 'passed'

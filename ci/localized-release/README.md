@@ -62,6 +62,8 @@ Final Mac code is signed inside-out with an ad-hoc signature and verified; `ditt
 
 ## Maintenance checks
 
+The preflight suite checks every formal macOS RV GUI script for direct successful Qt event-loop exits. The snapshot probe, both language smoke checks and all chooser-persistence launches must close their owned RV session normally. Callback tests cover close rejection and premature destruction; native packaging still requires clean process exits, and publication checks both languages' shutdown evidence. A passing Python assertion or success marker never overrides a native crash or timeout.
+
 Edit translations in `localization/i18n_zh.ts`, owned native code under `overlay/src/`, and reviewed upstream changes under `patches/`. Refresh the schema-2 resource manifest after changing mapped files and before committing. The refresh tool reads Git-index blobs so a Windows checkout's line endings cannot change the recorded source identity.
 
 ```sh

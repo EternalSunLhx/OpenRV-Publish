@@ -103,6 +103,41 @@ class RuntimeEvidenceTests(unittest.TestCase):
         output = evidence.collect(self.repo, 'arm64', self.diagnostics)
         self.assertFalse((output / 'crash-stacks').exists())
 
+    def test_smoke_gui_crashes_are_owned_even_before_persistence_runs(self):
+        (self.persistence / 'report.json').unlink()
+        smoke = {key: self.report[key] for key in ('startedAtUtc', 'finishedAtUtc')}
+        smoke['steps'] = [{'name': 'gui-en', 'pid': 456}, {'name': 'gui-zh_CN', 'pid': 789},
+                          {'name': 'python-ocio', 'pid': 987}, {'name': 'aac-mp4', 'pid': 654}]
+        self.write_json(self.work / 'smoke-arm64/report.json', smoke)
+        for name, pid in (('en', 456), ('zh', 789), ('python', 987), ('aac', 654), ('unknown', 345)):
+            self.ips('rv-' + name + '.ips', dict(self.crash, pid=pid))
+        self.ips('rv-en-wrong-executable.ips', dict(self.crash, pid=456, procPath='/another/rv'))
+        output = evidence.collect(self.repo, 'arm64', self.diagnostics)
+        stacks = [json.loads(path.read_text()) for path in (output / 'crash-stacks').glob('*.json')]
+        self.assertEqual({stack['pid'] for stack in stacks}, {456, 789})
+        self.assertEqual(len(stacks), 2)
+
+    def test_each_pid_remains_bound_to_its_own_report_time_window(self):
+        smoke = {'startedAtUtc': (self.now - datetime.timedelta(seconds=500)).isoformat(),
+                 'finishedAtUtc': (self.now - datetime.timedelta(seconds=480)).isoformat(),
+                 'steps': [{'name': 'gui-en', 'pid': 456}]}
+        self.write_json(self.work / 'smoke-arm64/report.json', smoke)
+        self.ips('rv-persistence-valid.ips')
+        self.ips('rv-persistence-outside-own-window.ips', age=490)
+        self.ips('rv-smoke-valid.ips', dict(self.crash, pid=456), age=490)
+        self.ips('rv-smoke-outside-own-window.ips', dict(self.crash, pid=456))
+        output = evidence.collect(self.repo, 'arm64', self.diagnostics)
+        stacks = [json.loads(path.read_text()) for path in (output / 'crash-stacks').glob('*.json')]
+        self.assertEqual({stack['pid'] for stack in stacks}, {123, 456})
+        self.assertEqual(len(stacks), 2)
+
+    def test_smoke_pid_without_both_valid_timestamps_is_not_owned(self):
+        smoke = {'startedAtUtc': self.now.isoformat(), 'steps': [{'name': 'gui-en', 'pid': 456}]}
+        self.write_json(self.work / 'smoke-arm64/report.json', smoke)
+        self.ips('rv-smoke-no-finish.ips', dict(self.crash, pid=456))
+        output = evidence.collect(self.repo, 'arm64', self.diagnostics)
+        self.assertFalse((output / 'crash-stacks').exists())
+
     def test_oversized_ips_cannot_supply_crash_evidence(self):
         oversized = self.ips('rv-owned.ips')
         size = oversized.stat().st_size

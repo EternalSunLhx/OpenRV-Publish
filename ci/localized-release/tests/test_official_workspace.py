@@ -153,7 +153,11 @@ class OfficialWorkspaceTests(unittest.TestCase):
                     for name in files:
                         (assets / name).write_bytes(b'Offline package shape fixture only\n')
                     manifest = {**source, 'platform': platform, 'architecture': arch, 'files': files,
-                                'smoke': [{'name': 'aac-mp4', 'status': 'passed'}],
+                                'guiPassed': True,
+                                'smoke': [{'name': 'aac-mp4', 'status': 'passed'}] + [
+                                    {'name': 'gui-' + language, 'status': 'passed', 'exitCode': 0,
+                                     'timedOut': False, 'requestClose': True, 'closeAccepted': True,
+                                     'sessionClosed': True} for language in ('en', 'zh_CN')],
                                 'installerSmoke': {'status': 'passed', 'removed': True},
                                 'languagePersistence': {'status': 'passed',
                                     'preferenceRecovery': {'restore': 'passed', 'verify': 'passed'},
@@ -176,6 +180,14 @@ class OfficialWorkspaceTests(unittest.TestCase):
                 windows.write_bytes(correct)
                 mac = assets / 'OpenRV-4.0.3-build.17-macOS-arm64.build.json'
                 correct_mac = mac.read_bytes()
+                for change in ({'exitCode': -10}, {'timedOut': True}, {'sessionClosed': False},
+                               {'closeAccepted': 1}, {'requestClose': None}, {'name': 'gui-en'}):
+                    with self.subTest(gui_shutdown=change):
+                        manifest = json.loads(correct_mac)
+                        manifest['smoke'][2].update(change)
+                        mac.write_text(json.dumps(manifest))
+                        with self.assertRaisesRegex(ValueError, 'Mac GUI checks'):
+                            assemble(repo, assets, 'v4.0.3')
                 for field in ('requestClose', 'closeAccepted', 'sessionClosed'):
                     with self.subTest(missing_lifecycle=field):
                         manifest = json.loads(correct_mac)
