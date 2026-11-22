@@ -260,7 +260,7 @@
       "source": "ci/localized-release/post_package_smoke.py",
       "destination": "ci/localized-release/post_package_smoke.py",
       "mode": "100644",
-      "sha256": "d49ae19243aadb5687b899279446f54d9ee645fbab9ad60c8718d21ae7375e96",
+      "sha256": "2d445de8022a5076bf1f256a814dc31970463ca25a8673118e9bd8fceaedf805",
       "replace": false
     },
     {
@@ -337,7 +337,7 @@
       "source": "ci/localized-release/runtime_smoke.py",
       "destination": "ci/localized-release/runtime_smoke.py",
       "mode": "100644",
-      "sha256": "381336b460237e11019da7dca4af62b2cf71a3f2b1068d176a6329c5ac6fa87c",
+      "sha256": "68886ed19aa99640ba2c0221c18ef427ef5c4030c961c17afb7e6bb8a27b0e89",
       "replace": false
     },
     {
@@ -645,7 +645,7 @@
       "source": "localization/i18n_zh.ts",
       "destination": "src/lib/app/RvCommon/qrc/translations/i18n_zh.ts",
       "mode": "100644",
-      "sha256": "3eeed6fb4b3aff8c364d475795cce34c989b9766423b20f1c07173cb28a026cb",
+      "sha256": "e3d4c114a16ae4e97860acf661ef7edbfc2995ded6c00cd01fb422662fe2f33d",
       "replace": true
     },
     {
@@ -673,7 +673,7 @@
       "source": "overlay/src/lib/app/RvCommon/RvCommon/RvUpdateChecker.h",
       "destination": "src/lib/app/RvCommon/RvCommon/RvUpdateChecker.h",
       "mode": "100644",
-      "sha256": "3ea76e64ba0b810ccdcdd6d5411f7ed955730f680d5a5da389ec19b8bab55b08",
+      "sha256": "e6528e11fcd7430a81b808dd1bf36fdf24b4bb6a6a58b1b03576acb65baae977",
       "replace": false
     },
     {
@@ -694,7 +694,7 @@
       "source": "overlay/src/lib/app/RvCommon/RvUpdateChecker.cpp",
       "destination": "src/lib/app/RvCommon/RvUpdateChecker.cpp",
       "mode": "100644",
-      "sha256": "a9f09875bfa06717081d4444f6a92ad747e630cce3a4efc5759df3bc997e7fee",
+      "sha256": "2ec74b1378048088ecf81200330039e293ccfaaddd7a5f0b7ddcc2d58a688b94",
       "replace": false
     },
     {
@@ -722,14 +722,14 @@
       "source": "tests/localization/language_persistence.py",
       "destination": "tests/localization/language_persistence.py",
       "mode": "100644",
-      "sha256": "90efc7292a6c8e0dd0b32ca0945289dc8ba11f9163a696c1b140bd46da5108fc",
+      "sha256": "8ba63d02092daf979848e4d4a7cad0caf9fc9cf4ef3ee1b1358801091e5f749d",
       "replace": false
     },
     {
       "source": "tests/localization/macos_language_persistence.py",
       "destination": "tests/localization/macos_language_persistence.py",
       "mode": "100644",
-      "sha256": "0bfe8f4b8d6250d3955cdceb2d03647abe3129df984cd139a32eb0a5dd3b0bf3",
+      "sha256": "3eed81224116db33c00e5d13ca2db0ee731ee88a4df9ef06e8e409402bb89a1c",
       "replace": false
     },
     {
@@ -778,7 +778,7 @@
       "source": "tests/localization/update_checker/README.md",
       "destination": "tests/localization/update_checker/README.md",
       "mode": "100644",
-      "sha256": "11cf5235082c0b62ade5541e8da2409e13eb9230c43468b437eb5fdd87042e43",
+      "sha256": "0a5937089af5b8a535e9f0b49d15c9d82c1bc07dabbcefd1212db1852b0fdcd1",
       "replace": false
     },
     {
@@ -792,7 +792,7 @@
       "source": "tests/localization/update_checker/test_update_checker.cpp",
       "destination": "tests/localization/update_checker/test_update_checker.cpp",
       "mode": "100644",
-      "sha256": "17adf1826eb91dad6e9a93108080f241cdf6fbe857b465daa3e643f221f06287",
+      "sha256": "d1a31945cbebc0b1e2c1e9a5717aafb9cbee0ff786e8f8f2c69a746ba40f04d8",
       "replace": false
     },
     {

@@ -8,14 +8,19 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
+#include <QEvent>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QLabel>
+#include <QLockFile>
 #include <QMenu>
 #include <QMap>
 #include <QSet>
+#include <QSettings>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -378,9 +383,17 @@ namespace Rv
     }
 
     RvUpdateChecker::RvUpdateChecker(QObject* parent, QNetworkAccessManager* manager, int timeoutMs)
-        : QObject(parent), m_manager(manager), m_timer(new QTimer(this)), m_timeoutMs(qBound(1, timeoutMs, 15000))
+        : QObject(parent), m_manager(manager), m_dailyTimer(new QTimer(this)), m_timer(new QTimer(this)),
+          m_timeoutMs(qBound(1, timeoutMs, 15000))
     {
         setObjectName(QStringLiteral("rvUpdateChecker"));
+        m_dailyTimer->setSingleShot(true);
+        m_dailyTimer->setTimerType(Qt::PreciseTimer);
+        connect(m_dailyTimer, &QTimer::timeout, this, &RvUpdateChecker::checkAutomatically);
+        connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
+            if (state == Qt::ApplicationActive && !m_windows.isEmpty())
+                m_dailyTimer->start(0);
+        });
         m_timer->setSingleShot(true);
         connect(m_timer, &QTimer::timeout, this, [this]() {
             if (m_reply)
@@ -392,6 +405,85 @@ namespace Rv
     }
 
     RvUpdateChecker::~RvUpdateChecker() { abortRequest(); }
+
+    void RvUpdateChecker::watchWindow(QWidget* window)
+    {
+        if (!window || m_windows.contains(window) || qgetenv("RV_DISABLE_AUTOMATIC_UPDATE_CHECK") == "1")
+            return;
+        m_windows.insert(window);
+        window->installEventFilter(this);
+        connect(window, &QObject::destroyed, this, [this, window]() { m_windows.remove(window); });
+        if (window->isVisible())
+            m_dailyTimer->start(0);
+    }
+
+    bool RvUpdateChecker::eventFilter(QObject* watched, QEvent* event)
+    {
+        if (event->type() == QEvent::Show || event->type() == QEvent::WindowActivate
+            || event->type() == QEvent::WindowStateChange)
+            m_dailyTimer->start(0);
+        return QObject::eventFilter(watched, event);
+    }
+
+    QWidget* RvUpdateChecker::visibleWindow() const
+    {
+        QWidget* active = QApplication::activeWindow();
+        if (m_windows.contains(active) && active->isVisible() && !active->isMinimized())
+            return active;
+        for (QWidget* window : m_windows)
+            if (window->isVisible() && !window->isMinimized())
+                return window;
+        return nullptr;
+    }
+
+    QDateTime RvUpdateChecker::currentDateTime() const { return QDateTime::currentDateTime(); }
+
+    bool RvUpdateChecker::claimAutomaticCheck(const QDate& date)
+    {
+        if (m_checkedDate == date)
+            return false;
+        QSettings settings(QSettings::IniFormat, QSettings::UserScope, QStringLiteral("OpenRV-Publish"),
+                           QStringLiteral("UpdateChecker"));
+        settings.setFallbacksEnabled(false);
+        if (!QFileInfo(settings.fileName()).absoluteDir().mkpath(QStringLiteral(".")))
+            return false;
+        // Serialize only the read/claim/write. The network request runs outside this lock.
+        QLockFile lock(settings.fileName() + QStringLiteral(".daily.lock"));
+        if (!lock.tryLock(0))
+            return false;
+        settings.sync();
+        if (settings.status() != QSettings::NoError)
+            return false;
+        const QString key = QStringLiteral("lastAutomaticCheckDate");
+        const QString today = date.toString(Qt::ISODate);
+        if (settings.value(key).toString() == today)
+        {
+            m_checkedDate = date;
+            return false;
+        }
+        settings.setValue(key, today);
+        settings.sync();
+        if (settings.status() != QSettings::NoError)
+            return false;
+        m_checkedDate = date;
+        return true;
+    }
+
+    void RvUpdateChecker::checkAutomatically()
+    {
+        if (QCoreApplication::closingDown() || qgetenv("RV_DISABLE_AUTOMATIC_UPDATE_CHECK") == "1" || !visibleWindow())
+            return;
+        const QDateTime now = currentDateTime();
+        const QDateTime tomorrow = now.date().addDays(1).startOfDay();
+        // A bounded recheck also observes clock changes or resume without a window activation.
+        m_dailyTimer->start(int(qBound(qint64(1), now.msecsTo(tomorrow), qint64(15 * 60 * 1000))));
+        // A manual request from today can serve both checks. Yesterday's response
+        // cannot claim today; finishRequest will recheck when that request ends.
+        if (m_reply && m_requestDate != now.date())
+            return;
+        if (claimAutomaticCheck(now.date()) && !m_reply)
+            startRequest(true);
+    }
 
     void RvUpdateChecker::abortRequest()
     {
@@ -415,15 +507,26 @@ namespace Rv
             m_dialog->activateWindow();
             return;
         }
-        abortRequest();
+        m_automaticRequest = false;
+        createDialog(parent, false);
+        m_dialog->show();
+        if (!m_reply)
+            startRequest(false);
+    }
+
+    void RvUpdateChecker::createDialog(QWidget* parent, bool automatic)
+    {
         QDialog* dialog = new QDialog(parent);
         m_dialog = dialog;
         dialog->setAttribute(Qt::WA_DeleteOnClose);
+        if (automatic)
+            dialog->setAttribute(Qt::WA_ShowWithoutActivating);
         dialog->setObjectName(QStringLiteral("rvUpdateDialog"));
         dialog->setWindowTitle(tr("Check for Updates"));
         dialog->setMinimumWidth(430);
         const Updates::LocalVersion local = Updates::currentBuild();
         dialog->setProperty("rvCurrentVersion", local.display);
+        dialog->setProperty("rvAutomaticUpdate", automatic);
         dialog->setProperty("rvUpdateResult", QStringLiteral("checking"));
         QVBoxLayout* layout = new QVBoxLayout(dialog);
         QLabel* current = new QLabel(tr("Current version: %1").arg(local.display), dialog);
@@ -454,11 +557,17 @@ namespace Rv
         connect(m_download, &QPushButton::clicked, this, [this]() { openLink(m_downloadUrl); });
         connect(m_notes, &QPushButton::clicked, this, [this]() { openLink(m_releaseUrl); });
         connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
-        connect(dialog, &QDialog::finished, this, [this, dialog](int) {
+        connect(dialog, &QDialog::finished, this, [this, dialog, automatic](int) {
             if (m_dialog == dialog)
             {
+                dialog->disconnect(this);
                 abortRequest();
                 m_dialog.clear();
+                // "Later" can dismiss a prompt that stayed open across midnight.
+                if (automatic)
+                    claimAutomaticCheck(currentDateTime().date());
+                if (!m_windows.isEmpty())
+                    m_dailyTimer->start(0);
             }
         });
         // A document closing also destroys its child dialog; cancellation must not
@@ -467,20 +576,28 @@ namespace Rv
             if (m_dialog.data() == dialog || m_dialog.isNull())
                 abortRequest();
         });
-        dialog->show();
+    }
+
+    void RvUpdateChecker::startRequest(bool automatic)
+    {
         if (!m_manager)
             m_manager = new QNetworkAccessManager(this);
+        m_automaticRequest = automatic;
+        m_requestDate = currentDateTime().date();
         m_response.clear();
         m_timedOut = m_tooLarge = false;
-        m_downloadUrl.clear();
-        m_releaseUrl.clear();
+        if (!automatic)
+        {
+            m_downloadUrl.clear();
+            m_releaseUrl.clear();
+        }
         QNetworkRequest request(QUrl(QStringLiteral("https://api.github.com/repos/EternalSunLhx/OpenRV-Publish/releases/latest")));
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
         request.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::AlwaysNetwork);
         request.setRawHeader("Accept", "application/vnd.github+json");
         request.setRawHeader("Accept-Encoding", "identity");
         request.setRawHeader("X-GitHub-Api-Version", "2026-03-10");
-        request.setRawHeader("User-Agent", "OpenRV-Publish-update-check/" + local.display.toUtf8());
+        request.setRawHeader("User-Agent", "OpenRV-Publish-update-check/" + Updates::currentBuild().display.toUtf8());
         QNetworkReply* reply = m_manager->get(request);
         m_reply = reply;
         reply->setReadBufferSize(maxResponseBytes + 1);
@@ -504,7 +621,7 @@ namespace Rv
             return;
         m_dialog->setProperty("rvUpdateResult", state);
         m_status->setText(text);
-        m_close->setText(tr("Close"));
+        m_close->setText(m_dialog->property("rvAutomaticUpdate").toBool() ? tr("Later") : tr("Close"));
         m_dialog->adjustSize();
     }
 
@@ -519,25 +636,47 @@ namespace Rv
         m_response += reply->readAll();
         m_reply.clear();
         reply->deleteLater();
-        if (!m_dialog)
+        const bool previousDay = m_requestDate != currentDateTime().date();
+        if (!m_windows.isEmpty() && previousDay)
+            m_dailyTimer->start(0);
+        const bool automatic = m_automaticRequest;
+        if (automatic && previousDay)
             return;
+        // A result window may have been left open from a previous day.
+        // An unsuccessful background request must not replace its contents.
+        const auto reportFailure = [this, automatic](const QString& state, const QString& message) {
+            if (!automatic)
+                setResult(state, message);
+        };
         if (m_timedOut)
-            return setResult(QStringLiteral("error"), tr("The update check timed out. Try again later."));
+            return reportFailure(QStringLiteral("error"), tr("The update check timed out. Try again later."));
         if (m_tooLarge || m_response.size() > maxResponseBytes)
-            return setResult(QStringLiteral("error"), tr("The release response was too large."));
+            return reportFailure(QStringLiteral("error"), tr("The release response was too large."));
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         if (status == 404)
-            return setResult(QStringLiteral("no-release"), tr("This repository has no published release yet."));
+            return reportFailure(QStringLiteral("no-release"), tr("This repository has no published release yet."));
         if (status == 403 || status == 429)
-            return setResult(QStringLiteral("error"), tr("GitHub rejected the request or its rate limit was reached. Try again later."));
+            return reportFailure(QStringLiteral("error"), tr("GitHub rejected the request or its rate limit was reached. Try again later."));
         if (reply->error() != QNetworkReply::NoError)
-            return setResult(QStringLiteral("error"), tr("The update check failed. Check your Internet connection and try again."));
+            return reportFailure(QStringLiteral("error"), tr("The update check failed. Check your Internet connection and try again."));
         if (status != 200)
-            return setResult(QStringLiteral("error"), tr("The update server returned an unexpected response (HTTP %1).").arg(status));
+            return reportFailure(QStringLiteral("error"), tr("The update server returned an unexpected response (HTTP %1).").arg(status));
         const Updates::ParseResult parsed = Updates::parseRelease(m_response, Updates::compiledPlatform(), Updates::compiledArchitecture());
         if (!parsed.isValid())
-            return setResult(QStringLiteral("error"), tr("The release information could not be verified. No download was opened."));
+            return reportFailure(QStringLiteral("error"), tr("The release information could not be verified. No download was opened."));
         const Updates::ReleaseInfo& release = parsed.release;
+        const Updates::Offer offer = Updates::compareRelease(Updates::currentBuild(), release.version);
+        const bool showAutomaticDialog = automatic && !m_dialog;
+        if (automatic)
+        {
+            QWidget* parent = visibleWindow();
+            if (!parent || offer != Updates::Offer::Newer || release.downloadUrl.isEmpty())
+                return;
+            if (!m_dialog)
+                createDialog(parent, true);
+        }
+        if (!m_dialog)
+            return;
         const QString latestDisplay = release.version.displayVersion();
         m_latest->setText(tr("Latest published version: %1").arg(latestDisplay));
         m_dialog->setProperty("rvLatestVersion", latestDisplay);
@@ -548,7 +687,6 @@ namespace Rv
         m_dialog->setProperty("rvReleaseUrl", m_releaseUrl);
         m_dialog->setProperty("rvDownloadUrl", m_downloadUrl);
         m_notes->show();
-        const Updates::Offer offer = Updates::compareRelease(Updates::currentBuild(), release.version);
         if (offer == Updates::Offer::Current)
             return setResult(QStringLiteral("current"), tr("You are running the latest published version."));
         if (offer == Updates::Offer::Older)
@@ -564,6 +702,8 @@ namespace Rv
             return setResult(QStringLiteral("development-alternative"), tr("You are running a development build. A published version of the same base version is available."));
         }
         setResult(QStringLiteral("newer"), tr("A newer published version is available. Download its installer to upgrade."));
+        if (showAutomaticDialog)
+            m_dialog->show();
     }
 
     void RvUpdateChecker::openLink(const QUrl& url)
@@ -581,6 +721,7 @@ namespace Rv
         static QPointer<RvUpdateChecker> checker;
         if (!checker)
             checker = new RvUpdateChecker(qApp);
+        checker->watchWindow(dialogParent);
         const Updates::LocalVersion local = Updates::currentBuild();
         qApp->setProperty("rvLocalizedVersion", local.display);
         qApp->setProperty("rvLocalizedReleaseTag", QStringLiteral(RV_LOCALIZED_RELEASE_TAG));

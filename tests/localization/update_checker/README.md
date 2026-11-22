@@ -1,6 +1,8 @@
 # Published-release update checks
 
-The Help action sends one unauthenticated HTTPS request after an explicit click. It reads stable releases from `EternalSunLhx/OpenRV-Publish`; it is asynchronous, cancellable, limited to 15 seconds / 2 MiB, and reuses an existing dialog/request. It opens validated browser download URLs and does not install or execute the download.
+When an RV session window is visible, the client checks the latest stable release from `EternalSunLhx/OpenRV-Publish` once per local calendar day. The last automatic attempt is saved per user across restarts. A session left open checks again the next day. A verified newer installer for the current platform opens the update dialog. Selecting **Later** dismisses the reminder for the day. Background errors stay silent.
+
+**Help → Check for Updates** is available at any time and can display the result of an in-flight automatic request. Both paths use the same asynchronous HTTPS request, 15-second timeout, 2 MiB limit and installer URL validation. Downloads open in the browser when selected. Set `RV_DISABLE_AUTOMATIC_UPDATE_CHECK=1` to suppress background checks in a scripted GUI session.
 
 Official releases use `vX.Y.Z` with an internal positive build counter. New publications use twelve clean filenames without `-build.N`, with platform build manifests retained in Actions artifacts. One single-line hidden `openrv-publication` JSON comment binds the exact tag, positive uint64 build-number string and all twelve SHA-256 digests. The parser requires the exact asset set, uploaded state, positive sizes, matching API digests and canonical repository/tag URLs before offering the compiled platform's installer. Missing companions, mixed cohorts, duplicate JSON members/assets and invalid markers are rejected; an invalid marker never falls back to the older layout.
 

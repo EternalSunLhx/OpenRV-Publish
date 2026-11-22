@@ -288,6 +288,7 @@ def main():
                     target = folder / key.lower(); target.mkdir()
                     environment[key] = str(target)
                 environment.update(PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1', RV_NO_CONSOLE_REDIRECT='1',
+                                   RV_DISABLE_AUTOMATIC_UPDATE_CHECK='1',
                                    RV_INIT=str(scripts / 'rvrc.mu'), RV_PYINIT=str(scripts / 'rvrc.py'),
                                    RV_UI_LANGUAGE=language, ORV_POST_CASE=case,
                                    ORV_POST_MEDIA=str(fixture), ORV_POST_REPORT=str(folder / 'gui.json'))

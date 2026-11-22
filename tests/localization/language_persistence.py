@@ -287,6 +287,7 @@ def main() -> int:
             temporary.mkdir()
             crashes.mkdir()
             environment.update(APPDATA=str(shared['appdata']), LOCALAPPDATA=str(shared['localappdata']),
+                               RV_DISABLE_AUTOMATIC_UPDATE_CHECK='1',
                                TEMP=str(temporary), TMP=str(temporary), RV_SUPPORT_PATH=str(shared['support']),
                                RV_CRASH_DUMPS_DIR=str(crashes), RV_INIT=str(scripts / 'rvrc.mu'), RV_PYINIT=str(scripts / 'rvrc.py'),
                                PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1', RV_NO_CONSOLE_REDIRECT='1',

@@ -4,6 +4,7 @@
 #include <QtTest/QtTest>
 #include <QApplication>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -13,6 +14,8 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QPushButton>
+#include <QSettings>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <cstring>
 
@@ -114,6 +117,7 @@ class FakeReply : public QNetworkReply
 public:
     FakeReply(const QNetworkRequest& request, FakeManager* manager);
     void abort() override;
+    void complete();
     qint64 bytesAvailable() const override { return m_data.size() - m_offset + QNetworkReply::bytesAvailable(); }
 protected:
     qint64 readData(char* destination, qint64 maximum) override
@@ -141,6 +145,7 @@ public:
     int delay = 1;
     int requests = 0;
     int aborts = 0;
+    QPointer<FakeReply> lastReply;
     QNetworkRequest lastRequest;
 protected:
     QNetworkReply* createRequest(Operation operation, const QNetworkRequest& request, QIODevice*) override
@@ -148,7 +153,8 @@ protected:
         Q_ASSERT(operation == GetOperation);
         ++requests;
         lastRequest = request;
-        return new FakeReply(request, this);
+        lastReply = new FakeReply(request, this);
+        return lastReply;
     }
 };
 
@@ -160,16 +166,20 @@ FakeReply::FakeReply(const QNetworkRequest& request, FakeManager* manager)
     setOperation(QNetworkAccessManager::GetOperation);
     setAttribute(QNetworkRequest::HttpStatusCodeAttribute, manager->status);
     open(QIODevice::ReadOnly);
-    QTimer::singleShot(manager->delay, this, [this]() {
-        if (m_done)
-            return;
-        m_done = true;
-        if (m_manager->responseError != QNetworkReply::NoError)
-            setError(m_manager->responseError, QStringLiteral("Fixture network error"));
-        emit readyRead();
-        setFinished(true);
-        emit finished();
-    });
+    if (manager->delay >= 0)
+        QTimer::singleShot(manager->delay, this, &FakeReply::complete);
+}
+
+void FakeReply::complete()
+{
+    if (m_done)
+        return;
+    m_done = true;
+    if (m_manager->responseError != QNetworkReply::NoError)
+        setError(m_manager->responseError, QStringLiteral("Fixture network error"));
+    emit readyRead();
+    setFinished(true);
+    emit finished();
 }
 
 void FakeReply::abort()
@@ -191,10 +201,28 @@ static QDialog* updateDialog()
     return nullptr;
 }
 
+class DailyTestChecker : public Rv::RvUpdateChecker
+{
+public:
+    using RvUpdateChecker::RvUpdateChecker;
+    QDateTime now{QDate(2026, 11, 22), QTime(12, 0)};
+
+protected:
+    QDateTime currentDateTime() const override { return now; }
+};
+
 class UpdateCheckerTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void init()
+    {
+        QSettings settings(QSettings::IniFormat, QSettings::UserScope, "OpenRV-Publish", "UpdateChecker");
+        settings.clear();
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+    }
+
     void cleanup()
     {
         for (QWidget* widget : QApplication::topLevelWidgets())
@@ -571,6 +599,232 @@ private slots:
         QVERIFY(!updateDialog());
     }
 
+    void dailyCheckIsSharedByVisibleWindowsAndControllers()
+    {
+        FakeManager manager;
+        manager.delay = -1;
+        manager.status = 404;
+        QWidget firstWindow, secondWindow;
+        DailyTestChecker first(nullptr, &manager), second(nullptr, &manager);
+        first.watchWindow(&firstWindow);
+        first.watchWindow(&firstWindow);
+        second.watchWindow(&secondWindow);
+        QCoreApplication::processEvents();
+        QCOMPARE(manager.requests, 0);
+
+        firstWindow.show();
+        secondWindow.show();
+        first.watchWindow(&secondWindow);
+        QTRY_COMPARE(manager.requests, 1);
+        QVERIFY(QMetaObject::invokeMethod(&first, "checkAutomatically", Qt::DirectConnection));
+        QVERIFY(QMetaObject::invokeMethod(&second, "checkAutomatically", Qt::DirectConnection));
+        QCOMPARE(manager.requests, 1);
+        QVERIFY(!updateDialog());
+        manager.lastReply->complete();
+        QVERIFY(!updateDialog());
+    }
+
+    void laterSurvivesRestartAndManualCheckRemainsAvailable()
+    {
+        FakeManager manager;
+        manager.delay = -1;
+        const auto local = currentBuild();
+        const QString tag = local.officialTag ? 'v' + local.base.toString() : QStringLiteral("v5.0.0");
+        const quint64 build = local.officialTag ? local.buildNumber + 1 : 35;
+        manager.payload = bytes(cleanReleaseObject(tag, build));
+        const QUrl installer = parseRelease(manager.payload, compiledPlatform(), compiledArchitecture()).release.downloadUrl;
+        if (installer.isEmpty())
+            QSKIP("The automatic offer requires a supported installer.");
+
+        QWidget window;
+        window.show();
+        {
+            DailyTestChecker checker(nullptr, &manager);
+            checker.watchWindow(&window);
+            QTRY_COMPARE(manager.requests, 1);
+            QVERIFY(!updateDialog());
+            manager.lastReply->complete();
+            QTRY_VERIFY(updateDialog() && updateDialog()->isVisible());
+            QVERIFY(updateDialog()->property("rvAutomaticUpdate").toBool());
+            QCOMPARE(updateDialog()->property("rvUpdateResult").toString(), QStringLiteral("newer"));
+            QCOMPARE(updateDialog()->property("rvLatestReleaseTag").toString(), tag);
+            QCOMPARE(updateDialog()->property("rvLatestBuildNumber").toULongLong(), build);
+            auto latest = updateDialog()->findChild<QLabel*>("rvLatestUpdateVersion");
+            QVERIFY(latest);
+            const QString version = tag.mid(1) + QStringLiteral("+build.%1").arg(build);
+            QCOMPARE(latest->text(), QStringLiteral("Latest published version: %1").arg(version));
+            QCOMPARE(updateDialog()->property("rvDownloadUrl").toUrl(), installer);
+            auto download = updateDialog()->findChild<QPushButton*>("rvUpdateDownloadButton");
+            auto later = updateDialog()->findChild<QPushButton*>("rvUpdateCloseButton");
+            QVERIFY(download && download->isVisible());
+            QVERIFY(later && later->isVisible());
+            QCOMPARE(later->text(), QStringLiteral("Later"));
+            later->click();
+            QTRY_VERIFY(!updateDialog());
+        }
+        {
+            DailyTestChecker restarted(nullptr, &manager);
+            restarted.watchWindow(&window);
+            QCoreApplication::processEvents();
+            QVERIFY(QMetaObject::invokeMethod(&restarted, "checkAutomatically", Qt::DirectConnection));
+            QCOMPARE(manager.requests, 1);
+            QVERIFY(!updateDialog());
+
+            restarted.showDialog(&window);
+            QCOMPARE(manager.requests, 2);
+            manager.lastReply->complete();
+            QTRY_VERIFY(updateDialog() && updateDialog()->property("rvUpdateResult").toString() == "newer");
+            QVERIFY(!updateDialog()->property("rvAutomaticUpdate").toBool());
+            updateDialog()->reject();
+            QTRY_VERIFY(!updateDialog());
+
+            restarted.now = restarted.now.addDays(1);
+            QVERIFY(QMetaObject::invokeMethod(&restarted, "checkAutomatically", Qt::DirectConnection));
+            QCOMPARE(manager.requests, 3);
+            manager.lastReply->complete();
+            QTRY_VERIFY(updateDialog() && updateDialog()->property("rvAutomaticUpdate").toBool());
+
+            // The user resumes the next morning and dismisses yesterday's
+            // still-open reminder before the next automatic check runs.
+            restarted.now = restarted.now.addDays(1);
+            auto later = updateDialog()->findChild<QPushButton*>("rvUpdateCloseButton");
+            QVERIFY(later);
+            later->click();
+            QTRY_VERIFY(!updateDialog());
+            QVERIFY(QMetaObject::invokeMethod(&restarted, "checkAutomatically", Qt::DirectConnection));
+            QCOMPARE(manager.requests, 3);
+        }
+    }
+
+    void openWindowChecksAgainAtLocalMidnight()
+    {
+        FakeManager manager;
+        manager.delay = -1;
+        manager.status = 404;
+        QWidget window;
+        DailyTestChecker checker(nullptr, &manager);
+        checker.now = QDateTime(QDate(2026, 12, 31), QTime(23, 59, 59, 900));
+        window.show();
+        checker.watchWindow(&window);
+        QTRY_COMPARE(manager.requests, 1);
+        manager.lastReply->complete();
+        QVERIFY(!updateDialog());
+
+        // No new window, activation, or explicit check. The production timer
+        // must wake the still-open application on the new local calendar day.
+        checker.now = checker.now.addMSecs(150);
+        QTRY_COMPARE_WITH_TIMEOUT(manager.requests, 2, 3000);
+        manager.lastReply->complete();
+        QVERIFY(QMetaObject::invokeMethod(&checker, "checkAutomatically", Qt::DirectConnection));
+        QCOMPARE(manager.requests, 2);
+        QVERIFY(!updateDialog());
+    }
+
+    void automaticNonOffersStaySilent_data()
+    {
+        QTest::addColumn<int>("status");
+        QTest::addColumn<QByteArray>("payload");
+        QTest::addColumn<int>("networkError");
+        const auto local = currentBuild();
+        const QString tag = 'v' + local.base.toString();
+        auto same = local.officialTag ? cleanReleaseObject(tag, local.buildNumber)
+            : releaseObject(tag + QStringLiteral("-zh.%1").arg(local.development ? 1 : local.edition));
+        auto missing = officialReleaseObject("v5.0.0");
+        missing["assets"] = QJsonArray{};
+        const int noError = int(QNetworkReply::NoError);
+        QTest::newRow("current-or-development-alternative") << 200 << bytes(same) << noError;
+        QTest::newRow("older") << 200 << bytes(cleanReleaseObject("v1.0.0")) << noError;
+        QTest::newRow("no-installer") << 200 << bytes(missing) << noError;
+        QTest::newRow("no-release") << 404 << QByteArray("{}") << noError;
+        QTest::newRow("offline") << 0 << QByteArray() << int(QNetworkReply::HostNotFoundError);
+        QTest::newRow("bad-metadata") << 200 << QByteArray("invalid") << noError;
+    }
+
+    void yesterdayRequestStillRunningAtMidnightDoesNotConsumeToday()
+    {
+        FakeManager manager;
+        manager.delay = -1;
+        manager.status = 404;
+        QWidget window;
+        DailyTestChecker checker(nullptr, &manager);
+        checker.now = QDateTime(QDate(2026, 11, 22), QTime(23, 59, 58));
+        window.show();
+        checker.watchWindow(&window);
+        QTRY_COMPARE(manager.requests, 1);
+        checker.now = checker.now.addSecs(3);
+        QVERIFY(QMetaObject::invokeMethod(&checker, "checkAutomatically", Qt::DirectConnection));
+        QCOMPARE(manager.requests, 1);
+        manager.lastReply->complete();
+        QTRY_COMPARE(manager.requests, 2);
+        manager.lastReply->complete();
+        QVERIFY(!updateDialog());
+    }
+
+    void automaticNonOffersStaySilent()
+    {
+        QFETCH(int, status);
+        QFETCH(QByteArray, payload);
+        QFETCH(int, networkError);
+        FakeManager manager;
+        manager.delay = -1;
+        manager.status = status;
+        manager.payload = payload;
+        manager.responseError = static_cast<QNetworkReply::NetworkError>(networkError);
+        QWidget window;
+        DailyTestChecker checker(nullptr, &manager);
+        window.show();
+        checker.watchWindow(&window);
+        QTRY_COMPARE(manager.requests, 1);
+        QVERIFY(!updateDialog());
+        manager.lastReply->complete();
+        QCoreApplication::processEvents();
+        QVERIFY(!updateDialog());
+        QVERIFY(QMetaObject::invokeMethod(&checker, "checkAutomatically", Qt::DirectConnection));
+        QCOMPARE(manager.requests, 1);
+    }
+
+    void manualDialogAdoptsAnInFlightDailyCheck()
+    {
+        FakeManager manager;
+        manager.delay = -1;
+        manager.status = 403;
+        QWidget window;
+        DailyTestChecker checker(nullptr, &manager);
+        window.show();
+        checker.watchWindow(&window);
+        QTRY_COMPARE(manager.requests, 1);
+        QVERIFY(!updateDialog());
+
+        checker.showDialog(&window);
+        QVERIFY(updateDialog() && updateDialog()->isVisible());
+        QCOMPARE(updateDialog()->property("rvUpdateResult").toString(), QStringLiteral("checking"));
+        QCOMPARE(manager.requests, 1);
+        QCOMPARE(manager.aborts, 0);
+        manager.lastReply->complete();
+        QTRY_COMPARE(updateDialog()->property("rvUpdateResult").toString(), QStringLiteral("error"));
+        QVERIFY(!updateDialog()->property("rvAutomaticUpdate").toBool());
+        QCOMPARE(manager.requests, 1);
+    }
+
+    void lastDocumentClosedBeforeDailyReplyCannotLeaveAPrompt()
+    {
+        FakeManager manager;
+        manager.delay = -1;
+        manager.payload = bytes(cleanReleaseObject("v5.0.0"));
+        DailyTestChecker checker(nullptr, &manager);
+        {
+            QWidget window;
+            checker.watchWindow(&window);
+            window.show();
+            QTRY_COMPARE(manager.requests, 1);
+        }
+        // Implementations may also cancel when the final document disappears.
+        if (manager.lastReply && !manager.lastReply->isFinished())
+            manager.lastReply->complete();
+        QCoreApplication::processEvents();
+        QVERIFY(!updateDialog());
+    }
+
     void successfulRequestAndHeaders()
     {
         FakeManager manager;
@@ -694,7 +948,12 @@ private slots:
 int main(int argc, char** argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
+    qunsetenv("RV_DISABLE_AUTOMATIC_UPDATE_CHECK");
     QApplication application(argc, argv);
+    QTemporaryDir settingsDirectory;
+    if (!settingsDirectory.isValid())
+        return 1;
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     UpdateCheckerTests tests;
     return QTest::qExec(&tests, argc, argv);
 }

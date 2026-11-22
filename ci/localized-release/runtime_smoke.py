@@ -276,6 +276,7 @@ def main() -> int:
         for key, filename in (('RV_INIT', 'rvrc.mu'), ('RV_PYINIT', 'rvrc.py'), ('RVIO_INIT', 'rviorc.mu')):
             environment[key] = str(scripts / filename)
         environment.update(PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1', RV_NO_CONSOLE_REDIRECT='1',
+                           RV_DISABLE_AUTOMATIC_UPDATE_CHECK='1',
                            ORV_RUNTIME=str(runtime), ORV_INPUT=str(work / 'input.png'),
                            ORV_EXR=str(work / 'converted.exr'), ORV_ROUNDTRIP=str(work / 'roundtrip.png'),
                            ORV_GUI_REPORT=str(folder / 'gui.json'),

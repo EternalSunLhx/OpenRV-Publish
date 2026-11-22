@@ -400,6 +400,7 @@ def main(argv=None) -> int:
             destination.mkdir(exist_ok=True)
             environment[key] = str(destination)
         environment.update(PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1', RV_NO_CONSOLE_REDIRECT='1',
+                           RV_DISABLE_AUTOMATIC_UPDATE_CHECK='1',
                            RV_INIT=str(scripts / 'rvrc.mu'), RV_PYINIT=str(scripts / 'rvrc.py'),
                            ORV_MAC_PERSIST_CONFIG=str(config_path), ORV_LANGUAGE_PERSIST_CONFIG=str(config_path))
         if language:

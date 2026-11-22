@@ -3,8 +3,10 @@
 #define RV_UPDATE_CHECKER_H
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <QUrl>
 #include <QVersionNumber>
 
@@ -68,16 +70,27 @@ namespace Rv
     }
 
     // One application-owned controller is reused by the rebuilt Help menus.
-    // No request occurs until showDialog() is called by the user's action.
     class RvUpdateChecker : public QObject
     {
         Q_OBJECT
     public:
         explicit RvUpdateChecker(QObject* parent = nullptr, QNetworkAccessManager* manager = nullptr, int timeoutMs = 15000);
         ~RvUpdateChecker() override;
+        void watchWindow(QWidget* window);
         void showDialog(QWidget* parent = nullptr);
 
+    protected:
+        bool eventFilter(QObject* watched, QEvent* event) override;
+        virtual QDateTime currentDateTime() const;
+
+    private slots:
+        void checkAutomatically();
+
     private:
+        QWidget* visibleWindow() const;
+        bool claimAutomaticCheck(const QDate& date);
+        void createDialog(QWidget* parent, bool automatic);
+        void startRequest(bool automatic);
         void abortRequest();
         void finishRequest(QNetworkReply* reply);
         void setResult(const QString& state, const QString& text);
@@ -91,9 +104,14 @@ namespace Rv
         QPointer<QPushButton> m_close;
         QPointer<QPushButton> m_download;
         QPointer<QPushButton> m_notes;
+        QSet<QWidget*> m_windows;
+        QDate m_checkedDate;
+        QDate m_requestDate;
+        QTimer* m_dailyTimer;
         QTimer* m_timer = nullptr;
         int m_timeoutMs;
         QByteArray m_response;
+        bool m_automaticRequest = false;
         bool m_timedOut = false;
         bool m_tooLarge = false;
         QUrl m_downloadUrl;
